@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestApplyOntologyDefaults(t *testing.T) {
 	cfg := &Config{}
@@ -86,6 +89,34 @@ func TestApplyOntologyDefaultsIgnoresInvalidEnvOverrides(t *testing.T) {
 	}
 	if cfg.Ontology.ExtractMinEntities != 4 {
 		t.Fatalf("ExtractMinEntities = %d, want existing 4 when env is invalid", cfg.Ontology.ExtractMinEntities)
+	}
+}
+
+func TestValidateConfigRejectsInvalidOntologyConfidenceThreshold(t *testing.T) {
+	cfg := &Config{
+		Ontology: &OntologyConfig{ConfidenceThreshold: 1.1},
+	}
+
+	err := ValidateConfig(cfg)
+	if err == nil {
+		t.Fatal("ValidateConfig returned nil, want error")
+	}
+	if !strings.Contains(err.Error(), "ontology.confidence_threshold must be between 0 and 1") {
+		t.Fatalf("ValidateConfig error = %q, want ontology confidence threshold error", err.Error())
+	}
+}
+
+func TestValidateConfigRejectsNegativeOntologyExtractMinEntities(t *testing.T) {
+	cfg := &Config{
+		Ontology: &OntologyConfig{ExtractMinEntities: -1},
+	}
+
+	err := ValidateConfig(cfg)
+	if err == nil {
+		t.Fatal("ValidateConfig returned nil, want error")
+	}
+	if !strings.Contains(err.Error(), "ontology.extract_min_entities must be >= 0") {
+		t.Fatalf("ValidateConfig error = %q, want ontology extract min entities error", err.Error())
 	}
 }
 

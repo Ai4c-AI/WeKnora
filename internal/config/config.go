@@ -606,6 +606,15 @@ func ValidateConfig(cfg *Config) error {
 		}
 	}
 
+	if cfg.Ontology != nil {
+		if cfg.Ontology.ConfidenceThreshold < 0 || cfg.Ontology.ConfidenceThreshold > 1 {
+			errs = append(errs, "ontology.confidence_threshold must be between 0 and 1")
+		}
+		if cfg.Ontology.ExtractMinEntities < 0 {
+			errs = append(errs, "ontology.extract_min_entities must be >= 0")
+		}
+	}
+
 	if cfg.KnowledgeBase != nil {
 		if cfg.KnowledgeBase.ChunkSize <= 0 {
 			errs = append(errs, "knowledge_base.chunk_size must be > 0")
