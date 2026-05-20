@@ -341,7 +341,7 @@ conversation:
 
 - .NET 10 (C#) + ASP.NET Core Minimal API
 - dotNetRDF 3.x（dotNetRdf、dotNetRdf.Inferencing、dotNetRdf.Shacl）
-- Npgsql 8.x + Dapper 2.x 访问 PG
+- Npgsql 10.0.2 + Dapper 2.1.79 访问 PG
 - Docker 镜像：`mcr.microsoft.com/dotnet/aspnet:10.0-alpine`（约 100MB）
 
 ### 5.2 核心洞察
@@ -463,8 +463,8 @@ NuGet 依赖：
 - `dotNetRdf` 3.3.*
 - `dotNetRdf.Inferencing` 3.3.*
 - `dotNetRdf.Shacl` 3.3.*
-- `Npgsql` 8.*
-- `Dapper` 2.*
+- `Npgsql` 10.0.2
+- `Dapper` 2.1.79
 
 ### 5.9 切片合成（查询路径）
 
