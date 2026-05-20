@@ -230,3 +230,204 @@ templates:
           "strength": 8
         }
       ]
+
+  - id: "default_extract_micro_tbox"
+    name: "Micro-TBox Extraction"
+    description: "Extract a chunk-local schema fragment (micro-TBox) from already-extracted entities and relationships"
+    default: true
+    content: |
+      ## Task
+      Given a text chunk along with the entities and relationships already extracted from it,
+      infer the LOCAL schema-level facts: class hierarchy, property characteristics, and
+      integrity constraints that are EXPLICITLY supported by this specific text.
+
+      The output is a "micro-TBox": a chunk-scoped ontology fragment. It is valid ONLY within
+      the context of this chunk. Do NOT generalize to universal truths. Do NOT invent
+      vocabulary outside the provided entities and relationships.
+
+      ## Output Format
+      Return ONE JSON object (NOT an array) with these top-level fields:
+        - classes:    array of class declarations
+        - properties: array of property declarations
+        - shapes:     array of SHACL-style integrity constraints
+        - aliases:    object mapping canonical id -> list of alternate names
+        - axioms:     array of free-form logical statements
+        - confidence: float in [0, 1] for the overall extraction quality
+
+      Any field with no content MUST be an empty array (or empty object for aliases).
+      Output ONLY the JSON object. No markdown fences, no explanations.
+
+      ## Hard Constraints
+      1. Every `id` in `classes` MUST match an entity `type` from the input entity list,
+         OR be a generalization explicitly named in the text (e.g. text says "Family, an
+         organization, ...") — in which case use the broader term as id.
+      2. Every `id` in `properties` MUST correspond to a relationship `description` or a
+         normalized form of it from the input relationship list.
+      3. Every extracted item MUST include an `evidence` field — a verbatim substring quoted
+         from the source text. If you cannot quote the supporting text, OMIT the item.
+      4. Use {{language}} for `label` fields only. Keep `id` fields in ASCII (camelCase or
+         PascalCase). Keep `evidence` exactly as it appears in the source text.
+      5. PREFER EMPTY OVER WRONG. Returning `{"classes": [], "properties": [], ...}` is the
+         correct answer when the text contains no schema-level statements.
+
+      ## Field Specifications
+
+      ### classes
+      Each element:
+        - id:           PascalCase identifier matching an entity type from input
+        - label:        human-readable name in {{language}}
+        - subClassOf:   id of parent class (null if not stated)
+        - disjointWith: array of class ids stated as mutually exclusive ([] if none)
+        - evidence:     verbatim quote from text
+
+      Only extract subClassOf when text explicitly states "X is a kind of Y" / "X 是一种 Y"
+      or equivalent. Only extract disjointWith when text explicitly states mutual exclusion
+      ("X cannot be Y", "X 和 Y 不能同时", "either X or Y but not both").
+
+      ### properties
+      Each element:
+        - id:              camelCase identifier matching a relationship type from input
+        - label:           human-readable name in {{language}}
+        - domain:          class id of source (must appear in `classes` or input entity types)
+        - range:           class id of target (same rule)
+        - characteristics: subset of ["functional", "inverseFunctional", "transitive",
+                                       "symmetric", "asymmetric", "reflexive", "irreflexive"]
+        - inverseOf:       id of inverse property (null if not stated)
+        - evidence:        verbatim quote
+
+      Guidance for `characteristics`:
+        - functional:        each subject has AT MOST ONE value (e.g. "biological father")
+        - inverseFunctional: each value has AT MOST ONE subject (e.g. "social security number")
+        - transitive:        A→B, B→C ⟹ A→C (e.g. "ancestor of", "part of")
+        - symmetric:         A→B ⟹ B→A (e.g. "married to", "sibling of")
+        - asymmetric:        A→B ⟹ NOT B→A (e.g. "parent of", "older than")
+      Include a characteristic ONLY if the text states it or strongly implies it through
+      the nature of the relationship. When in doubt, omit.
+
+      ### shapes
+      SHACL-style integrity constraints. Each element:
+        - target_class: class id this constraint applies to
+        - constraints:  array of constraint objects:
+                          { property, min_count, max_count, datatype, in_values }
+                        Use null for fields that don't apply.
+        - evidence:     verbatim quote
+
+      Example constraint: "Every Person must have at least one Family" →
+        { target_class: "Person",
+          constraints: [{ property: "isMemberOf", min_count: 1, max_count: null, ... }] }
+
+      ### aliases
+      Object mapping a canonical class/property id to a list of alternate names found
+      in this chunk. Include ONLY:
+        - Explicit equivalences ("X, also known as Y", "X, 又称 Y")
+        - Acronym expansions ("RAG (Retrieval-Augmented Generation)")
+        - Same entity in multiple languages ("Apple, 苹果公司")
+      Do NOT include translations, generic synonyms, or broader/narrower terms.
+
+      Format:
+        { "<canonical_id>": ["<alias1>", "<alias2>", ...] }
+
+      ### axioms
+      Free-form logical statements that classes/properties/shapes cannot express.
+      Use sparingly. Each element:
+        - statement: a clear English description of the logical rule
+        - evidence:  verbatim quote
+      Examples of when to use axioms:
+        - Complex constraints involving multiple classes/properties
+        - Conditional rules ("If X then Y")
+        - Negation over relations
+
+      ### confidence
+      Self-assessed quality score in [0, 1]:
+        - 1.0: text contains rich, explicit schema-level statements
+        - 0.5: some schema info but mostly implicit
+        - 0.0: pure instance-level text, no schema content (return empty arrays)
+
+      ## Anti-Patterns — DO NOT DO
+
+      ❌ Don't extract "Person disjointWith Organization" unless the text explicitly
+         distinguishes them as mutually exclusive in this domain.
+      ❌ Don't mark "knows" as transitive — humans knowing each other isn't transitive
+         even though graph paths exist.
+      ❌ Don't add aliases like "Person → 人" — that's a translation, not a domain alias.
+      ❌ Don't create classes for entity types that didn't appear in the input.
+      ❌ Don't extract evidence that paraphrases the text — must be verbatim.
+      ❌ Don't infer schema facts from world knowledge — only from the provided text.
+
+      ## Example 1 — Rich Extraction
+
+      [Input]
+      Text: "Romeo and Juliet is a tragedy written by William Shakespeare. The play centers
+      on two feuding families in Verona: the Montagues and the Capulets. A member of one
+      family cannot also be a member of the other. Romeo Montague, son of Lord Montague,
+      falls in love with Juliet Capulet, daughter of Lord Capulet. In this play, anyone who
+      is a descendant of a Montague is themselves a Montague."
+
+      Entities: [
+        {"title": "Romeo and Juliet", "type": "Work"},
+        {"title": "William Shakespeare", "type": "Person"},
+        {"title": "Romeo Montague", "type": "Person"},
+        {"title": "Juliet Capulet", "type": "Person"},
+        {"title": "Lord Montague", "type": "Person"},
+        {"title": "Lord Capulet", "type": "Person"},
+        {"title": "Montague", "type": "Organization"},
+        {"title": "Capulet", "type": "Organization"},
+        {"title": "Verona", "type": "Location"}
+      ]
+
+      Relationships: [
+        {"source": "William Shakespeare", "target": "Romeo and Juliet", "description": "wrote"},
+        {"source": "Romeo Montague", "target": "Lord Montague", "description": "son of"},
+        {"source": "Romeo Montague", "target": "Montague", "description": "is member of"},
+        {"source": "Juliet Capulet", "target": "Capulet", "description": "is member of"}
+      ]
+
+      [Output]
+      {
+        "classes": [
+          {"id": "Family", "label": "Family", "subClassOf": "Organization", "disjointWith": [], "evidence": "two feuding families in Verona: the Montagues and the Capulets"},
+          {"id": "Montague", "label": "Montague", "subClassOf": "Family", "disjointWith": ["Capulet"], "evidence": "A member of one family cannot also be a member of the other"},
+          {"id": "Capulet", "label": "Capulet", "subClassOf": "Family", "disjointWith": ["Montague"], "evidence": "A member of one family cannot also be a member of the other"}
+        ],
+        "properties": [
+          {"id": "wrote", "label": "wrote", "domain": "Person", "range": "Work", "characteristics": [], "inverseOf": "writtenBy", "evidence": "is a tragedy written by William Shakespeare"},
+          {"id": "sonOf", "label": "son of", "domain": "Person", "range": "Person", "characteristics": ["functional", "asymmetric", "irreflexive"], "inverseOf": null, "evidence": "Romeo Montague, son of Lord Montague"},
+          {"id": "descendantOf", "label": "descendant of", "domain": "Person", "range": "Organization", "characteristics": ["transitive", "asymmetric"], "inverseOf": null, "evidence": "anyone who is a descendant of a Montague is themselves a Montague"}
+        ],
+        "shapes": [
+          {"target_class": "Person", "constraints": [{"property": "isMemberOf", "min_count": null, "max_count": 1, "datatype": null, "in_values": null}], "evidence": "A member of one family cannot also be a member of the other"}
+        ],
+        "aliases": {},
+        "axioms": [
+          {"statement": "If a Person is a descendant of a Montague, that Person is also a member of Montague (descendantOf composes with isMemberOf for Montague).", "evidence": "anyone who is a descendant of a Montague is themselves a Montague"}
+        ],
+        "confidence": 0.9
+      }
+
+      ## Example 2 — Sparse Extraction (no schema content)
+
+      [Input]
+      Text: "The meeting started at 9 AM. Alice presented the quarterly report. Bob asked
+      a question about revenue."
+
+      Entities: [
+        {"title": "Alice", "type": "Person"},
+        {"title": "Bob", "type": "Person"},
+        {"title": "quarterly report", "type": "Work"}
+      ]
+
+      Relationships: [
+        {"source": "Alice", "target": "quarterly report", "description": "presented"}
+      ]
+
+      [Output]
+      {"classes": [], "properties": [], "shapes": [], "aliases": {}, "axioms": [], "confidence": 0.0}
+
+      Note: The text describes an event with instance-level facts but contains NO
+      schema-level statements. The correct output is all empty arrays — do NOT fabricate
+      type hierarchy or property characteristics.
+
+      ## CRITICAL: Language Rule
+      - Keep `id` fields in ASCII (PascalCase for classes, camelCase for properties).
+      - Write `label`, `statement`, and free-text fields in {{language}}.
+      - Keep `evidence` strings EXACTLY as they appear in the source text — do not translate.
