@@ -35,7 +35,15 @@ conversation:
     context_template_id: "default_context"  # from prompt_templates/context_template.yaml
   extract_entities_prompt_id: "default_extract_entities"          # from prompt_templates/graph_extraction.yaml
   extract_relationships_prompt_id: "default_extract_relationships"  # from prompt_templates/graph_extraction.yaml
+  extract_micro_tbox_prompt_id: "default_extract_micro_tbox"        # from prompt_templates/graph_extraction.yaml
   generate_questions_prompt_id: "default_generate_questions"        # from prompt_templates/generate_questions.yaml
+
+ontology:
+  enabled: false
+  reasoner_url: "http://ontology-reasoner:8090"
+  default_profile: "n3-extended"
+  confidence_threshold: 0.3
+  extract_min_entities: 2
 
 # Knowledge base configuration
 knowledge_base:

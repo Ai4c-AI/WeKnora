@@ -31,6 +31,7 @@ type Config struct {
 	ExtractManager  *ExtractManagerConfig  `yaml:"extract"          json:"extract"`
 	WebSearch       *WebSearchConfig       `yaml:"web_search"       json:"web_search"`
 	PromptTemplates *PromptTemplatesConfig `yaml:"prompt_templates" json:"prompt_templates"`
+	Ontology        *OntologyConfig        `yaml:"ontology"         json:"ontology"`
 	IM              *IMConfig              `yaml:"im"               json:"im"`
 	Agent           *AgentConfig           `yaml:"agent"            json:"agent"`
 }
@@ -84,6 +85,15 @@ type VectorDatabaseConfig struct {
 	Driver string `yaml:"driver" json:"driver"`
 }
 
+// OntologyConfig configures Ontology Slice extraction and reasoning.
+type OntologyConfig struct {
+	Enabled             bool    `yaml:"enabled"              json:"enabled"`
+	ReasonerURL         string  `yaml:"reasoner_url"         json:"reasoner_url"`
+	DefaultProfile      string  `yaml:"default_profile"      json:"default_profile"`
+	ConfidenceThreshold float64 `yaml:"confidence_threshold" json:"confidence_threshold"`
+	ExtractMinEntities  int     `yaml:"extract_min_entities" json:"extract_min_entities"`
+}
+
 // ConversationConfig 对话服务配置
 type ConversationConfig struct {
 	MaxRounds            int            `yaml:"max_rounds"                       json:"max_rounds"`
@@ -106,6 +116,7 @@ type ConversationConfig struct {
 	GenerateSummaryPromptID      string `yaml:"generate_summary_prompt_id"        json:"generate_summary_prompt_id"`
 	ExtractEntitiesPromptID      string `yaml:"extract_entities_prompt_id"        json:"extract_entities_prompt_id"`
 	ExtractRelationshipsPromptID string `yaml:"extract_relationships_prompt_id"   json:"extract_relationships_prompt_id"`
+	ExtractMicroTBoxPromptID     string `yaml:"extract_micro_tbox_prompt_id"      json:"extract_micro_tbox_prompt_id"`
 	GenerateQuestionsPromptID    string `yaml:"generate_questions_prompt_id"      json:"generate_questions_prompt_id"`
 
 	// Resolved prompt text fields (populated by backfill, not from YAML)
@@ -116,6 +127,7 @@ type ConversationConfig struct {
 	GenerateSummaryPrompt      string `yaml:"-" json:"generate_summary_prompt"`
 	ExtractEntitiesPrompt      string `yaml:"-" json:"extract_entities_prompt"`
 	ExtractRelationshipsPrompt string `yaml:"-" json:"extract_relationships_prompt"`
+	ExtractMicroTBoxPrompt     string `yaml:"-" json:"extract_micro_tbox_prompt"`
 	GenerateQuestionsPrompt    string `yaml:"-" json:"generate_questions_prompt"`
 
 	// IntentSystemPrompts maps intent values (e.g. "greeting", "chitchat") to
@@ -521,6 +533,7 @@ func LoadConfig() (*Config, error) {
 	applyKnowledgeBaseEnvOverrides(&cfg)
 	applyAuthAndTenantDefaults(&cfg)
 	applyAuditDefaults(&cfg)
+	applyOntologyDefaults(&cfg)
 
 	if err := ValidateConfig(&cfg); err != nil {
 		return nil, err
@@ -817,6 +830,24 @@ func applyAuditDefaults(cfg *Config) {
 	}
 }
 
+func applyOntologyDefaults(cfg *Config) {
+	if cfg.Ontology == nil {
+		cfg.Ontology = &OntologyConfig{}
+	}
+	if cfg.Ontology.ReasonerURL == "" {
+		cfg.Ontology.ReasonerURL = "http://ontology-reasoner:8090"
+	}
+	if cfg.Ontology.DefaultProfile == "" {
+		cfg.Ontology.DefaultProfile = "n3-extended"
+	}
+	if cfg.Ontology.ConfidenceThreshold == 0 {
+		cfg.Ontology.ConfidenceThreshold = 0.3
+	}
+	if cfg.Ontology.ExtractMinEntities == 0 {
+		cfg.Ontology.ExtractMinEntities = 2
+	}
+}
+
 // into actual prompt text content. Only xxx_id fields are used;
 // no fallback to default templates.
 func backfillConversationDefaults(cfg *Config) {
@@ -864,6 +895,13 @@ func backfillConversationDefaults(cfg *Config) {
 			conv.ExtractRelationshipsPrompt = t.Content
 		} else {
 			fmt.Printf("Warning: extract_relationships_prompt_id %q not found\n", conv.ExtractRelationshipsPromptID)
+		}
+	}
+	if conv.ExtractMicroTBoxPromptID != "" {
+		if t := FindTemplateByID(pt, conv.ExtractMicroTBoxPromptID); t != nil {
+			conv.ExtractMicroTBoxPrompt = t.Content
+		} else {
+			fmt.Printf("Warning: extract_micro_tbox_prompt_id %q not found\n", conv.ExtractMicroTBoxPromptID)
 		}
 	}
 	if conv.GenerateQuestionsPromptID != "" {
