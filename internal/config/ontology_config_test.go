@@ -27,6 +27,68 @@ func TestApplyOntologyDefaults(t *testing.T) {
 	}
 }
 
+func TestApplyOntologyDefaultsUsesEnvOverrides(t *testing.T) {
+	t.Setenv("ONTOLOGY_ENABLE", "true")
+	t.Setenv("ONTOLOGY_REASONER_URL", " https://reasoner.example.test ")
+	t.Setenv("ONTOLOGY_DEFAULT_PROFILE", " n3-strict ")
+	t.Setenv("ONTOLOGY_CONFIDENCE_THRESHOLD", "0.85")
+	t.Setenv("ONTOLOGY_EXTRACT_MIN_ENTITIES", "5")
+
+	cfg := &Config{
+		Ontology: &OntologyConfig{
+			Enabled:             false,
+			ReasonerURL:         "http://config-reasoner:8090",
+			DefaultProfile:      "config-profile",
+			ConfidenceThreshold: 0.4,
+			ExtractMinEntities:  3,
+		},
+	}
+
+	applyOntologyDefaults(cfg)
+
+	if !cfg.Ontology.Enabled {
+		t.Fatal("Enabled = false, want true")
+	}
+	if cfg.Ontology.ReasonerURL != "https://reasoner.example.test" {
+		t.Fatalf("ReasonerURL = %q, want %q", cfg.Ontology.ReasonerURL, "https://reasoner.example.test")
+	}
+	if cfg.Ontology.DefaultProfile != "n3-strict" {
+		t.Fatalf("DefaultProfile = %q, want %q", cfg.Ontology.DefaultProfile, "n3-strict")
+	}
+	if cfg.Ontology.ConfidenceThreshold != 0.85 {
+		t.Fatalf("ConfidenceThreshold = %v, want 0.85", cfg.Ontology.ConfidenceThreshold)
+	}
+	if cfg.Ontology.ExtractMinEntities != 5 {
+		t.Fatalf("ExtractMinEntities = %d, want 5", cfg.Ontology.ExtractMinEntities)
+	}
+}
+
+func TestApplyOntologyDefaultsIgnoresInvalidEnvOverrides(t *testing.T) {
+	t.Setenv("ONTOLOGY_ENABLE", "not-bool")
+	t.Setenv("ONTOLOGY_CONFIDENCE_THRESHOLD", "not-float")
+	t.Setenv("ONTOLOGY_EXTRACT_MIN_ENTITIES", "not-int")
+
+	cfg := &Config{
+		Ontology: &OntologyConfig{
+			Enabled:             true,
+			ConfidenceThreshold: 0.7,
+			ExtractMinEntities:  4,
+		},
+	}
+
+	applyOntologyDefaults(cfg)
+
+	if !cfg.Ontology.Enabled {
+		t.Fatal("Enabled = false, want existing true when env is invalid")
+	}
+	if cfg.Ontology.ConfidenceThreshold != 0.7 {
+		t.Fatalf("ConfidenceThreshold = %v, want existing 0.7 when env is invalid", cfg.Ontology.ConfidenceThreshold)
+	}
+	if cfg.Ontology.ExtractMinEntities != 4 {
+		t.Fatalf("ExtractMinEntities = %d, want existing 4 when env is invalid", cfg.Ontology.ExtractMinEntities)
+	}
+}
+
 func TestBackfillConversationDefaultsResolvesExtractMicroTBoxPrompt(t *testing.T) {
 	cfg := &Config{
 		Conversation: &ConversationConfig{

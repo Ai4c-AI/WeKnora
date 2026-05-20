@@ -846,6 +846,38 @@ func applyOntologyDefaults(cfg *Config) {
 	if cfg.Ontology.ExtractMinEntities == 0 {
 		cfg.Ontology.ExtractMinEntities = 2
 	}
+
+	applyOntologyEnvOverrides(cfg)
+}
+
+func applyOntologyEnvOverrides(cfg *Config) {
+	if value := strings.TrimSpace(os.Getenv("ONTOLOGY_ENABLE")); value != "" {
+		if enabled, err := strconv.ParseBool(value); err == nil {
+			cfg.Ontology.Enabled = enabled
+		} else {
+			fmt.Printf("[config] ONTOLOGY_ENABLE=%q is not a boolean, ignoring\n", value)
+		}
+	}
+	if value := strings.TrimSpace(os.Getenv("ONTOLOGY_REASONER_URL")); value != "" {
+		cfg.Ontology.ReasonerURL = value
+	}
+	if value := strings.TrimSpace(os.Getenv("ONTOLOGY_DEFAULT_PROFILE")); value != "" {
+		cfg.Ontology.DefaultProfile = value
+	}
+	if value := strings.TrimSpace(os.Getenv("ONTOLOGY_CONFIDENCE_THRESHOLD")); value != "" {
+		if threshold, err := strconv.ParseFloat(value, 64); err == nil {
+			cfg.Ontology.ConfidenceThreshold = threshold
+		} else {
+			fmt.Printf("[config] ONTOLOGY_CONFIDENCE_THRESHOLD=%q is not a float, ignoring\n", value)
+		}
+	}
+	if value := strings.TrimSpace(os.Getenv("ONTOLOGY_EXTRACT_MIN_ENTITIES")); value != "" {
+		if minEntities, err := strconv.Atoi(value); err == nil {
+			cfg.Ontology.ExtractMinEntities = minEntities
+		} else {
+			fmt.Printf("[config] ONTOLOGY_EXTRACT_MIN_ENTITIES=%q is not an integer, ignoring\n", value)
+		}
+	}
 }
 
 // into actual prompt text content. Only xxx_id fields are used;
