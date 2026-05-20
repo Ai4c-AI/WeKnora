@@ -169,6 +169,10 @@ type Chunk struct {
 	// when generating embeddings. NOT persisted — populated by the chunker
 	// during initial splitting and discarded after indexing.
 	ContextHeader string `json:"-" gorm:"-"`
+	OntologyJSON        *MicroTBox `json:"ontology_json,omitempty"        gorm:"type:jsonb;serializer:json"`
+	OntologyExtractedAt *time.Time `json:"ontology_extracted_at,omitempty"`
+	OntologyConfidence  *float64   `json:"ontology_confidence,omitempty"`
+	InstanceFactsJSON   []Triple   `json:"instance_facts_json,omitempty"  gorm:"type:jsonb;serializer:json"`
 }
 
 // EmbeddingContent returns the chunk content with ContextHeader prepended
