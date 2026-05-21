@@ -30,6 +30,42 @@ func TestApplyOntologyDefaults(t *testing.T) {
 	}
 }
 
+func TestApplyOntologyDefaultsPreservesExplicitZeroNumericValues(t *testing.T) {
+	cfg := &Config{
+		Ontology: &OntologyConfig{
+			ConfidenceThreshold: 0,
+			ExtractMinEntities:  0,
+		},
+	}
+
+	applyOntologyDefaultsWithExplicitness(cfg, true, true)
+
+	if cfg.Ontology.ConfidenceThreshold != 0 {
+		t.Fatalf("ConfidenceThreshold = %v, want explicit zero preserved", cfg.Ontology.ConfidenceThreshold)
+	}
+	if cfg.Ontology.ExtractMinEntities != 0 {
+		t.Fatalf("ExtractMinEntities = %d, want explicit zero preserved", cfg.Ontology.ExtractMinEntities)
+	}
+}
+
+func TestApplyOntologyDefaultsAppliesNumericDefaultsWhenUnset(t *testing.T) {
+	cfg := &Config{
+		Ontology: &OntologyConfig{
+			ConfidenceThreshold: 0,
+			ExtractMinEntities:  0,
+		},
+	}
+
+	applyOntologyDefaultsWithExplicitness(cfg, false, false)
+
+	if cfg.Ontology.ConfidenceThreshold != 0.3 {
+		t.Fatalf("ConfidenceThreshold = %v, want 0.3", cfg.Ontology.ConfidenceThreshold)
+	}
+	if cfg.Ontology.ExtractMinEntities != 2 {
+		t.Fatalf("ExtractMinEntities = %d, want 2", cfg.Ontology.ExtractMinEntities)
+	}
+}
+
 func TestApplyOntologyDefaultsUsesEnvOverrides(t *testing.T) {
 	t.Setenv("ONTOLOGY_ENABLE", "true")
 	t.Setenv("ONTOLOGY_REASONER_URL", " https://reasoner.example.test ")

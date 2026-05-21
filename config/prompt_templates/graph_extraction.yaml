@@ -370,8 +370,8 @@ templates:
         {"title": "Juliet Capulet", "type": "Person"},
         {"title": "Lord Montague", "type": "Person"},
         {"title": "Lord Capulet", "type": "Person"},
-        {"title": "Montague", "type": "Organization"},
-        {"title": "Capulet", "type": "Organization"},
+        {"title": "Montague", "type": "MontagueFamily"},
+        {"title": "Capulet", "type": "CapuletFamily"},
         {"title": "Verona", "type": "Location"}
       ]
 
@@ -386,8 +386,8 @@ templates:
       {
         "classes": [
           {"id": "Family", "label": "Family", "subClassOf": "Organization", "disjointWith": [], "evidence": "two feuding families in Verona: the Montagues and the Capulets"},
-          {"id": "Montague", "label": "Montague", "subClassOf": "Family", "disjointWith": ["Capulet"], "evidence": "A member of one family cannot also be a member of the other"},
-          {"id": "Capulet", "label": "Capulet", "subClassOf": "Family", "disjointWith": ["Montague"], "evidence": "A member of one family cannot also be a member of the other"}
+          {"id": "MontagueFamily", "label": "Montague", "subClassOf": "Family", "disjointWith": ["CapuletFamily"], "evidence": "A member of one family cannot also be a member of the other"},
+          {"id": "CapuletFamily", "label": "Capulet", "subClassOf": "Family", "disjointWith": ["MontagueFamily"], "evidence": "A member of one family cannot also be a member of the other"}
         ],
         "properties": [
           {"id": "wrote", "label": "wrote", "domain": "Person", "range": "Work", "characteristics": [], "inverseOf": "writtenBy", "evidence": "is a tragedy written by William Shakespeare"},

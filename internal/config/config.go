@@ -840,6 +840,14 @@ func applyAuditDefaults(cfg *Config) {
 }
 
 func applyOntologyDefaults(cfg *Config) {
+	applyOntologyDefaultsWithExplicitness(
+		cfg,
+		viper.IsSet("ontology.confidence_threshold"),
+		viper.IsSet("ontology.extract_min_entities"),
+	)
+}
+
+func applyOntologyDefaultsWithExplicitness(cfg *Config, confidenceSet bool, minEntitiesSet bool) {
 	if cfg.Ontology == nil {
 		cfg.Ontology = &OntologyConfig{}
 	}
@@ -849,10 +857,10 @@ func applyOntologyDefaults(cfg *Config) {
 	if cfg.Ontology.DefaultProfile == "" {
 		cfg.Ontology.DefaultProfile = "n3-extended"
 	}
-	if cfg.Ontology.ConfidenceThreshold == 0 {
+	if !confidenceSet && cfg.Ontology.ConfidenceThreshold == 0 {
 		cfg.Ontology.ConfidenceThreshold = 0.3
 	}
-	if cfg.Ontology.ExtractMinEntities == 0 {
+	if !minEntitiesSet && cfg.Ontology.ExtractMinEntities == 0 {
 		cfg.Ontology.ExtractMinEntities = 2
 	}
 
