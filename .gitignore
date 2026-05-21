@@ -56,3 +56,18 @@ fix-docker.sh
 
 # WeChat Mini Program local/private configuration
 miniprogram/project.private.config.json
+
+# .NET build output
+bin/
+obj/
+artifacts/
+
+# Rider / VS / VS Code
+.idea/
+.vs/
+.vscode/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+*.csproj.lscache

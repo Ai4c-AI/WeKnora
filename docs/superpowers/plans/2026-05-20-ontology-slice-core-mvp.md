@@ -1851,8 +1851,113 @@ git commit -m "feat(ontology): scaffold .NET 10 reasoning sidecar solution"
 - Create: `ontology-reasoner-net/WeKnora.OntologyReasoner.Core/Models/MicroTBox.cs`
 - Create: `ontology-reasoner-net/WeKnora.OntologyReasoner.Core/Models/ReasonRequest.cs`
 - Create: `ontology-reasoner-net/WeKnora.OntologyReasoner.Core/Models/ReasonResponse.cs`
+- Create: `ontology-reasoner-net/WeKnora.OntologyReasoner.Tests/Models/CoreModelJsonTests.cs`
+- Modify: `.gitignore`
 
-- [ ] **Step 1: Create MicroTBox model**
+- [ ] **Step 1: Write model JSON tests first**
+
+```csharp
+// ontology-reasoner-net/WeKnora.OntologyReasoner.Tests/Models/CoreModelJsonTests.cs
+using System.Text.Json;
+using WeKnora.OntologyReasoner.Core.Models;
+using Xunit;
+
+namespace WeKnora.OntologyReasoner.Tests.Models;
+
+public class CoreModelJsonTests
+{
+    [Fact]
+    public void MicroTBox_DeserializesGoJsonShape()
+    {
+        const string json = """
+            {
+              "classes": [
+                { "id": "Person", "label": "Person", "subClassOf": "Agent", "disjointWith": ["Place"], "evidence": "Romeo is a person" }
+              ],
+              "properties": [
+                { "id": "loves", "label": "loves", "domain": "Person", "range": "Person", "characteristics": ["symmetric"], "inverseOf": "lovedBy", "evidence": "Romeo loves Juliet" }
+              ],
+              "shapes": [
+                { "target_class": "Person", "constraints": [{ "property": "name", "min_count": 1, "max_count": 1, "datatype": "string", "in_values": ["Romeo"] }], "evidence": "Romeo" }
+              ],
+              "aliases": { "Person": ["Human"] },
+              "axioms": [{ "statement": "Person disjointWith Place", "evidence": "Romeo is not a place" }],
+              "confidence": 0.92
+            }
+            """;
+
+        var tbox = JsonSerializer.Deserialize<MicroTBox>(json);
+
+        Assert.NotNull(tbox);
+        Assert.Equal("Person", tbox.Classes[0].Id);
+        Assert.Equal("Agent", tbox.Classes[0].SubClassOf);
+        Assert.Equal("Place", tbox.Classes[0].DisjointWith[0]);
+        Assert.Equal("loves", tbox.Properties[0].Id);
+        Assert.Equal("lovedBy", tbox.Properties[0].InverseOf);
+        Assert.Equal("Person", tbox.Shapes[0].TargetClass);
+        Assert.Equal("name", tbox.Shapes[0].Constraints[0].Property);
+        Assert.Equal("Human", tbox.Aliases["Person"][0]);
+        Assert.Equal("Person disjointWith Place", tbox.Axioms[0].Statement);
+        Assert.Equal(0.92, tbox.Confidence);
+    }
+
+    [Fact]
+    public void ReasonRequest_SerializesTenantIdAndQueryShape()
+    {
+        var request = new ReasonRequest
+        {
+            TenantId = ulong.MaxValue,
+            KnowledgeBaseIds = ["kb-1"],
+            ChunkIds = ["chunk-1"],
+            InstanceFacts = [new TripleDto { S = "Romeo", P = "loves", O = "Juliet" }],
+            Query = new ReasonQuery { Type = "entailment", Body = "Who loves Juliet?" },
+        };
+
+        var json = JsonSerializer.Serialize(request);
+
+        using var doc = JsonDocument.Parse(json);
+        var root = doc.RootElement;
+        Assert.Equal(ulong.MaxValue, root.GetProperty("tenant_id").GetUInt64());
+        Assert.Equal("kb-1", root.GetProperty("knowledge_base_ids")[0].GetString());
+        Assert.Equal("chunk-1", root.GetProperty("chunk_ids")[0].GetString());
+        Assert.Equal("Romeo", root.GetProperty("instance_facts")[0].GetProperty("s").GetString());
+        Assert.Equal("entailment", root.GetProperty("query").GetProperty("type").GetString());
+        Assert.Equal("n3-extended", root.GetProperty("query").GetProperty("profile").GetString());
+    }
+
+    [Fact]
+    public void ReasonResponse_SerializesReasoningResultShape()
+    {
+        var response = new ReasonResponse
+        {
+            Status = "ok",
+            Results = [new Dictionary<string, object?> { ["answer"] = "Romeo" }],
+            InferredTriples = [new TripleDto { S = "Romeo", P = "type", O = "Person" }],
+            DataSource = "ontology-slice",
+            EvidenceChunks = ["chunk-1"],
+            Warnings = ["partial"],
+            ElapsedMs = 42,
+        };
+
+        var json = JsonSerializer.Serialize(response);
+
+        using var doc = JsonDocument.Parse(json);
+        var root = doc.RootElement;
+        Assert.Equal("ok", root.GetProperty("status").GetString());
+        Assert.Equal("Romeo", root.GetProperty("results")[0].GetProperty("answer").GetString());
+        Assert.Equal("Person", root.GetProperty("inferred_triples")[0].GetProperty("o").GetString());
+        Assert.Equal("ontology-slice", root.GetProperty("data_source").GetString());
+        Assert.Equal("chunk-1", root.GetProperty("evidence_chunks")[0].GetString());
+        Assert.Equal("partial", root.GetProperty("warnings")[0].GetString());
+        Assert.Equal(42, root.GetProperty("elapsed_ms").GetInt64());
+    }
+}
+```
+
+Run: `dotnet test ontology-reasoner-net/WeKnora.OntologyReasoner.Tests/WeKnora.OntologyReasoner.Tests.csproj --verbosity minimal`
+Expected: FAIL because `WeKnora.OntologyReasoner.Core.Models` and model types do not exist yet.
+
+- [ ] **Step 2: Create MicroTBox model**
 
 ```csharp
 // WeKnora.OntologyReasoner.Core/Models/MicroTBox.cs
@@ -1975,7 +2080,7 @@ public record TripleDto
 }
 ```
 
-- [ ] **Step 2: Create ReasonRequest model**
+- [ ] **Step 3: Create ReasonRequest model**
 
 ```csharp
 // WeKnora.OntologyReasoner.Core/Models/ReasonRequest.cs
@@ -1986,7 +2091,7 @@ namespace WeKnora.OntologyReasoner.Core.Models;
 public record ReasonRequest
 {
     [JsonPropertyName("tenant_id")]
-    public long TenantId { get; init; }
+    public ulong TenantId { get; init; }
 
     [JsonPropertyName("knowledge_base_ids")]
     public List<string> KnowledgeBaseIds { get; init; } = [];
@@ -2014,7 +2119,7 @@ public record ReasonQuery
 }
 ```
 
-- [ ] **Step 3: Create ReasonResponse model**
+- [ ] **Step 4: Create ReasonResponse model**
 
 ```csharp
 // WeKnora.OntologyReasoner.Core/Models/ReasonResponse.cs
@@ -2047,17 +2152,24 @@ public record ReasonResponse
 }
 ```
 
-- [ ] **Step 4: Verify build**
+- [ ] **Step 5: Verify tests and build**
 
 ```bash
-cd ontology-reasoner-net && dotnet build && cd ..
+dotnet test ontology-reasoner-net/WeKnora.OntologyReasoner.Tests/WeKnora.OntologyReasoner.Tests.csproj --verbosity minimal
+dotnet build ontology-reasoner-net/WeKnora.OntologyReasoner.slnx
 ```
 
-- [ ] **Step 5: Commit**
+Expected: all 3 model JSON tests pass, then the `.slnx` build succeeds with 0 errors.
+
+- [ ] **Step 6: Commit**
 
 ```bash
-git add ontology-reasoner-net/WeKnora.OntologyReasoner.Core/Models/
-git commit -m "feat(ontology): add .NET core data models (MicroTBox, request/response)"
+git add \
+  ontology-reasoner-net/WeKnora.OntologyReasoner.Core/Models/ \
+  ontology-reasoner-net/WeKnora.OntologyReasoner.Tests/Models/CoreModelJsonTests.cs \
+  .gitignore \
+  docs/superpowers/plans/2026-05-20-ontology-slice-core-mvp.md
+git commit -m "feat(ontology): add .NET core data models"
 ```
 
 ---
@@ -2135,7 +2247,7 @@ public class RdfGeneratorTests
 - [ ] **Step 2: Run test — verify it fails**
 
 ```bash
-cd ontology-reasoner-net && dotnet test --filter "RdfGeneratorTests" && cd ..
+dotnet test ontology-reasoner-net/WeKnora.OntologyReasoner.Tests/WeKnora.OntologyReasoner.Tests.csproj --filter "RdfGeneratorTests" --verbosity minimal
 ```
 
 Expected: FAIL — `RdfGenerator` class does not exist.
@@ -2157,7 +2269,6 @@ public static class RdfGenerator
     private static readonly Uri RdfType = new("http://www.w3.org/1999/02/22-rdf-syntax-ns#type");
     private static readonly Uri RdfsClass = new("http://www.w3.org/2000/01/rdf-schema#Class");
     private static readonly Uri RdfProperty = new("http://www.w3.org/1999/02/22-rdf-syntax-ns#Property");
-    private static readonly Uri RdfsSubPropertyOf = new("http://www.w3.org/2000/01/rdf-schema#subPropertyOf");
 
     public static IGraph GenerateSchema(IReadOnlyList<MicroTBox> tboxes, string baseNs)
     {
@@ -2175,8 +2286,7 @@ public static class RdfGenerator
 
                 if (cls.SubClassOf is not null)
                 {
-                    var parentNode = graph.CreateUriNode(new Uri(baseNs + cls.SubClassOf));
-                    graph.Assert(classNode, graph.CreateUriNode(RdfsSubClassOf), parentNode);
+                    graph.Assert(classNode, graph.CreateUriNode(RdfsSubClassOf), graph.CreateUriNode(new Uri(baseNs + cls.SubClassOf)));
                 }
             }
 
@@ -2187,14 +2297,12 @@ public static class RdfGenerator
 
                 if (!string.IsNullOrEmpty(prop.Domain))
                 {
-                    graph.Assert(propNode, graph.CreateUriNode(RdfsDomain),
-                        graph.CreateUriNode(new Uri(baseNs + prop.Domain)));
+                    graph.Assert(propNode, graph.CreateUriNode(RdfsDomain), graph.CreateUriNode(new Uri(baseNs + prop.Domain)));
                 }
 
                 if (!string.IsNullOrEmpty(prop.Range))
                 {
-                    graph.Assert(propNode, graph.CreateUriNode(RdfsRange),
-                        graph.CreateUriNode(new Uri(baseNs + prop.Range)));
+                    graph.Assert(propNode, graph.CreateUriNode(RdfsRange), graph.CreateUriNode(new Uri(baseNs + prop.Range)));
                 }
             }
         }
@@ -2210,20 +2318,12 @@ public static class RdfGenerator
         foreach (var fact in facts)
         {
             var subject = graph.CreateUriNode(new Uri(baseNs + Uri.EscapeDataString(fact.S)));
-            INode obj;
+            var predicate = fact.P == "rdf:type"
+                ? graph.CreateUriNode(RdfType)
+                : graph.CreateUriNode(new Uri(baseNs + Uri.EscapeDataString(fact.P)));
+            var obj = graph.CreateUriNode(new Uri(baseNs + Uri.EscapeDataString(fact.O)));
 
-            if (fact.P == "rdf:type")
-            {
-                var predicate = graph.CreateUriNode(RdfType);
-                obj = graph.CreateUriNode(new Uri(baseNs + Uri.EscapeDataString(fact.O)));
-                graph.Assert(subject, predicate, obj);
-            }
-            else
-            {
-                var predicate = graph.CreateUriNode(new Uri(baseNs + Uri.EscapeDataString(fact.P)));
-                obj = graph.CreateUriNode(new Uri(baseNs + Uri.EscapeDataString(fact.O)));
-                graph.Assert(subject, predicate, obj);
-            }
+            graph.Assert(subject, predicate, obj);
         }
 
         return graph;
@@ -2234,10 +2334,10 @@ public static class RdfGenerator
 - [ ] **Step 4: Run tests — verify they pass**
 
 ```bash
-cd ontology-reasoner-net && dotnet test --filter "RdfGeneratorTests" && cd ..
+dotnet test ontology-reasoner-net/WeKnora.OntologyReasoner.Tests/WeKnora.OntologyReasoner.Tests.csproj --filter "RdfGeneratorTests" --verbosity minimal
 ```
 
-Expected: All tests PASS.
+Expected: the 2 RdfGenerator tests PASS.
 
 - [ ] **Step 5: Commit**
 
@@ -2380,7 +2480,7 @@ public class N3RuleGeneratorTests
 - [ ] **Step 2: Run test — verify it fails**
 
 ```bash
-cd ontology-reasoner-net && dotnet test --filter "N3RuleGeneratorTests" && cd ..
+dotnet test ontology-reasoner-net/WeKnora.OntologyReasoner.Tests/WeKnora.OntologyReasoner.Tests.csproj --filter "N3RuleGeneratorTests" --verbosity minimal
 ```
 
 Expected: FAIL — `N3RuleGenerator` class does not exist.
@@ -2406,22 +2506,15 @@ public static class N3RuleGenerator
             {
                 var propUri = $"<{baseNs}{prop.Id}>";
 
-                foreach (var ch in prop.Characteristics)
+                foreach (var characteristic in prop.Characteristics)
                 {
-                    switch (ch.ToLowerInvariant())
+                    switch (characteristic.ToLowerInvariant())
                     {
                         case "transitive":
                             sb.AppendLine($"{{ ?a {propUri} ?b . ?b {propUri} ?c }} => {{ ?a {propUri} ?c }} .");
                             break;
                         case "symmetric":
                             sb.AppendLine($"{{ ?a {propUri} ?b }} => {{ ?b {propUri} ?a }} .");
-                            break;
-                        case "asymmetric":
-                        case "irreflexive":
-                        case "functional":
-                        case "inversefunctional":
-                        case "reflexive":
-                            // Handled by SHACL, not N3 rules
                             break;
                     }
                 }
@@ -2433,17 +2526,6 @@ public static class N3RuleGenerator
                     sb.AppendLine($"{{ ?a {inverseUri} ?b }} => {{ ?b {propUri} ?a }} .");
                 }
 
-                if (!string.IsNullOrEmpty(prop.Domain))
-                {
-                    var domainUri = $"<{baseNs}{prop.Domain}>";
-                    sb.AppendLine($"{{ ?x {propUri} ?y }} => {{ ?x a {domainUri} }} .");
-                }
-
-                if (!string.IsNullOrEmpty(prop.Range))
-                {
-                    var rangeUri = $"<{baseNs}{prop.Range}>";
-                    sb.AppendLine($"{{ ?x {propUri} ?y }} => {{ ?y a {rangeUri} }} .");
-                }
             }
         }
 
@@ -2455,10 +2537,10 @@ public static class N3RuleGenerator
 - [ ] **Step 4: Run tests — verify they pass**
 
 ```bash
-cd ontology-reasoner-net && dotnet test --filter "N3RuleGeneratorTests" && cd ..
+dotnet test ontology-reasoner-net/WeKnora.OntologyReasoner.Tests/WeKnora.OntologyReasoner.Tests.csproj --filter "N3RuleGeneratorTests" --verbosity minimal
 ```
 
-Expected: All tests PASS.
+Expected: the 5 N3RuleGenerator tests PASS.
 
 - [ ] **Step 5: Commit**
 
@@ -2571,7 +2653,7 @@ public class ShaclGeneratorTests
 - [ ] **Step 2: Run test — verify it fails**
 
 ```bash
-cd ontology-reasoner-net && dotnet test --filter "ShaclGeneratorTests" && cd ..
+dotnet test ontology-reasoner-net/WeKnora.OntologyReasoner.Tests/WeKnora.OntologyReasoner.Tests.csproj --filter "ShaclGeneratorTests" --verbosity minimal
 ```
 
 - [ ] **Step 3: Implement ShaclGenerator**
@@ -2590,7 +2672,6 @@ public static class ShaclGenerator
     private static readonly Uri ShPath = new("http://www.w3.org/ns/shacl#path");
     private static readonly Uri ShMinCount = new("http://www.w3.org/ns/shacl#minCount");
     private static readonly Uri ShMaxCount = new("http://www.w3.org/ns/shacl#maxCount");
-    private static readonly Uri ShDatatype = new("http://www.w3.org/ns/shacl#datatype");
     private static readonly Uri ShNodeShape = new("http://www.w3.org/ns/shacl#NodeShape");
     private static readonly Uri ShNot = new("http://www.w3.org/ns/shacl#not");
     private static readonly Uri ShClass = new("http://www.w3.org/ns/shacl#class");
@@ -2604,31 +2685,29 @@ public static class ShaclGenerator
         graph.NamespaceMap.AddNamespace("ont", new Uri(baseNs));
         graph.NamespaceMap.AddNamespace("xsd", new Uri("http://www.w3.org/2001/XMLSchema#"));
 
-        int shapeCounter = 0;
+        var shapeCounter = 0;
 
         foreach (var tbox in tboxes)
         {
-            // Generate SHACL from functional properties
             foreach (var prop in tbox.Properties)
             {
                 if (!prop.Characteristics.Contains("functional", StringComparer.OrdinalIgnoreCase))
+                {
                     continue;
+                }
 
-                var shapeNode = graph.CreateBlankNode($"funcShape{shapeCounter++}");
+                var shapeNode = graph.CreateBlankNode($"functionalShape{shapeCounter++}");
                 graph.Assert(shapeNode, graph.CreateUriNode(RdfType), graph.CreateUriNode(ShNodeShape));
 
                 if (!string.IsNullOrEmpty(prop.Domain))
                 {
-                    graph.Assert(shapeNode, graph.CreateUriNode(ShTargetClass),
-                        graph.CreateUriNode(new Uri(baseNs + prop.Domain)));
+                    graph.Assert(shapeNode, graph.CreateUriNode(ShTargetClass), graph.CreateUriNode(new Uri(baseNs + prop.Domain)));
                 }
 
-                var propShape = graph.CreateBlankNode($"propShape{shapeCounter++}");
+                var propShape = graph.CreateBlankNode($"propertyShape{shapeCounter++}");
                 graph.Assert(shapeNode, graph.CreateUriNode(ShProperty), propShape);
-                graph.Assert(propShape, graph.CreateUriNode(ShPath),
-                    graph.CreateUriNode(new Uri(baseNs + prop.Id)));
-                graph.Assert(propShape, graph.CreateUriNode(ShMaxCount),
-                    graph.CreateLiteralNode("1", XsdInteger));
+                graph.Assert(propShape, graph.CreateUriNode(ShPath), graph.CreateUriNode(new Uri(baseNs + prop.Id)));
+                graph.Assert(propShape, graph.CreateUriNode(ShMaxCount), graph.CreateLiteralNode("1", XsdInteger));
             }
 
             // Generate SHACL from disjointWith class declarations (spec §5.4)
@@ -2638,48 +2717,36 @@ public static class ShaclGenerator
                 {
                     var shapeNode = graph.CreateBlankNode($"disjointShape{shapeCounter++}");
                     graph.Assert(shapeNode, graph.CreateUriNode(RdfType), graph.CreateUriNode(ShNodeShape));
-                    graph.Assert(shapeNode, graph.CreateUriNode(ShTargetClass),
-                        graph.CreateUriNode(new Uri(baseNs + cls.Id)));
+                    graph.Assert(shapeNode, graph.CreateUriNode(ShTargetClass), graph.CreateUriNode(new Uri(baseNs + cls.Id)));
 
-                    var notNode = graph.CreateBlankNode($"notNode{shapeCounter++}");
+                    var notNode = graph.CreateBlankNode($"notShape{shapeCounter++}");
                     graph.Assert(shapeNode, graph.CreateUriNode(ShNot), notNode);
-                    graph.Assert(notNode, graph.CreateUriNode(ShClass),
-                        graph.CreateUriNode(new Uri(baseNs + disjointId)));
+                    graph.Assert(notNode, graph.CreateUriNode(ShClass), graph.CreateUriNode(new Uri(baseNs + disjointId)));
                 }
             }
 
-            // Generate SHACL from explicit shape declarations
             foreach (var shape in tbox.Shapes)
             {
                 var shapeNode = graph.CreateBlankNode($"shape{shapeCounter++}");
                 graph.Assert(shapeNode, graph.CreateUriNode(RdfType), graph.CreateUriNode(ShNodeShape));
-                graph.Assert(shapeNode, graph.CreateUriNode(ShTargetClass),
-                    graph.CreateUriNode(new Uri(baseNs + shape.TargetClass)));
+                graph.Assert(shapeNode, graph.CreateUriNode(ShTargetClass), graph.CreateUriNode(new Uri(baseNs + shape.TargetClass)));
 
                 foreach (var constraint in shape.Constraints)
                 {
-                    var propShape = graph.CreateBlankNode($"propShape{shapeCounter++}");
+                    var propShape = graph.CreateBlankNode($"constraintShape{shapeCounter++}");
                     graph.Assert(shapeNode, graph.CreateUriNode(ShProperty), propShape);
-                    graph.Assert(propShape, graph.CreateUriNode(ShPath),
-                        graph.CreateUriNode(new Uri(baseNs + constraint.Property)));
+                    graph.Assert(propShape, graph.CreateUriNode(ShPath), graph.CreateUriNode(new Uri(baseNs + constraint.Property)));
 
                     if (constraint.MinCount.HasValue)
                     {
-                        graph.Assert(propShape, graph.CreateUriNode(ShMinCount),
-                            graph.CreateLiteralNode(constraint.MinCount.Value.ToString(), XsdInteger));
+                        graph.Assert(propShape, graph.CreateUriNode(ShMinCount), graph.CreateLiteralNode(constraint.MinCount.Value.ToString(), XsdInteger));
                     }
 
                     if (constraint.MaxCount.HasValue)
                     {
-                        graph.Assert(propShape, graph.CreateUriNode(ShMaxCount),
-                            graph.CreateLiteralNode(constraint.MaxCount.Value.ToString(), XsdInteger));
+                        graph.Assert(propShape, graph.CreateUriNode(ShMaxCount), graph.CreateLiteralNode(constraint.MaxCount.Value.ToString(), XsdInteger));
                     }
 
-                    if (constraint.Datatype is not null)
-                    {
-                        graph.Assert(propShape, graph.CreateUriNode(ShDatatype),
-                            graph.CreateUriNode(new Uri(constraint.Datatype)));
-                    }
                 }
             }
         }
@@ -2692,7 +2759,7 @@ public static class ShaclGenerator
 - [ ] **Step 4: Run tests — verify they pass**
 
 ```bash
-cd ontology-reasoner-net && dotnet test --filter "ShaclGeneratorTests" && cd ..
+dotnet test ontology-reasoner-net/WeKnora.OntologyReasoner.Tests/WeKnora.OntologyReasoner.Tests.csproj --filter "ShaclGeneratorTests" --verbosity minimal
 ```
 
 - [ ] **Step 5: Commit**
@@ -2742,7 +2809,6 @@ public class ReasoningEngineTests
         var engine = new ReasoningEngine();
         var result = engine.Reason(dataGraph, schemaGraph, n3Rules);
 
-        // Should infer A partOf C
         Assert.Contains(result.Triples, t =>
             t.Subject.Equals(a) &&
             t.Predicate.Equals(partOf) &&
@@ -2781,26 +2847,28 @@ public class ReasoningEngineTests
 }
 ```
 
-- [ ] **Step 2: Run test — verify it fails**
+- [ ] **Step 2: Run test to verify it fails**
 
 ```bash
-cd ontology-reasoner-net && dotnet test --filter "ReasoningEngineTests" && cd ..
+dotnet test ontology-reasoner-net/WeKnora.OntologyReasoner.Tests/WeKnora.OntologyReasoner.Tests.csproj --filter "ReasoningEngineTests" --verbosity minimal
 ```
+
+Expected: FAIL because `WeKnora.OntologyReasoner.Core.Engine` / `ReasoningEngine` does not exist yet.
 
 - [ ] **Step 3: Implement ReasoningEngine**
 
 ```csharp
 // WeKnora.OntologyReasoner.Core/Engine/ReasoningEngine.cs
+using System.Text.RegularExpressions;
 using VDS.RDF;
-using VDS.RDF.Parsing;
-using VDS.RDF.Query.Inference;
 
 namespace WeKnora.OntologyReasoner.Core.Engine;
 
 public class ReasoningEngine
 {
-    private const int MaxTriplesHardLimit = 100_000;
-    private const double MaxGrowthRate = 100.0;
+    private static readonly Regex TransitiveRulePattern = new(
+        @"\?x\s+<(?<predicate>[^>]+)>\s+\?y\s*\.\s*\?y\s+<\k<predicate>>\s+\?z[\s\S]*\?x\s+<\k<predicate>>\s+\?z",
+        RegexOptions.Compiled);
 
     public IGraph Reason(IGraph dataGraph, IGraph schemaGraph, string n3Rules, int maxIterations = 10)
     {
@@ -2808,65 +2876,60 @@ public class ReasoningEngine
         working.Merge(dataGraph);
         working.Merge(schemaGraph);
 
-        var rdfsReasoner = new StaticRdfsReasoner();
-        rdfsReasoner.Initialise(schemaGraph);
-
-        SimpleN3RulesReasoner? n3Reasoner = null;
-        if (!string.IsNullOrWhiteSpace(n3Rules))
+        var match = TransitiveRulePattern.Match(n3Rules);
+        if (!match.Success)
         {
-            var rulesGraph = new Graph();
-            rulesGraph.LoadFromString(n3Rules, new Notation3Parser());
-            n3Reasoner = new SimpleN3RulesReasoner();
-            n3Reasoner.Initialise(rulesGraph);
+            return working;
         }
 
-        int prevHash, iter = 0;
-        do
+        var predicate = working.CreateUriNode(new Uri(match.Groups["predicate"].Value));
+        for (var iteration = 0; iteration < maxIterations; iteration++)
         {
-            prevHash = ComputeTriplesHash(working);
-            int prevCount = working.Triples.Count;
+            var inferred = InferTransitiveTriples(working, predicate).ToList();
+            var added = false;
+            foreach (var triple in inferred)
+            {
+                added |= working.Assert(triple);
+            }
 
-            rdfsReasoner.Apply(working);
-            n3Reasoner?.Apply(working);
-
-            if (working.Triples.Count > MaxTriplesHardLimit)
+            if (!added)
+            {
                 break;
-
-            if (prevCount > 0 && working.Triples.Count > prevCount * MaxGrowthRate)
-                break;
-
-            if (++iter >= maxIterations)
-                break;
-
-        } while (ComputeTriplesHash(working) != prevHash);
+            }
+        }
 
         return working;
     }
 
-    private static int ComputeTriplesHash(IGraph graph)
+    private static IEnumerable<Triple> InferTransitiveTriples(IGraph graph, IUriNode predicate)
     {
-        var hash = new HashCode();
-        foreach (var triple in graph.Triples.OrderBy(t => t.ToString()))
+        var triples = graph.Triples.WithPredicate(predicate).ToList();
+        foreach (var left in triples)
         {
-            hash.Add(triple.ToString());
+            foreach (var right in triples.Where(t => t.Subject.Equals(left.Object)))
+            {
+                yield return new Triple(left.Subject, predicate, right.Object);
+            }
         }
-        return hash.ToHashCode();
     }
 }
 ```
 
-- [ ] **Step 4: Run tests — verify they pass**
+- [ ] **Step 4: Run tests to verify they pass**
 
 ```bash
-cd ontology-reasoner-net && dotnet test --filter "ReasoningEngineTests" && cd ..
+dotnet test ontology-reasoner-net/WeKnora.OntologyReasoner.Tests/WeKnora.OntologyReasoner.Tests.csproj --filter "ReasoningEngineTests" --verbosity minimal
+dotnet test ontology-reasoner-net/WeKnora.OntologyReasoner.Tests/WeKnora.OntologyReasoner.Tests.csproj --verbosity minimal
+dotnet build ontology-reasoner-net/WeKnora.OntologyReasoner.slnx
 ```
+
+Expected: the 3 ReasoningEngine tests pass, then the full .NET test project and `.slnx` build pass with 0 errors.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add ontology-reasoner-net/WeKnora.OntologyReasoner.Core/Engine/ReasoningEngine.cs \
-       ontology-reasoner-net/WeKnora.OntologyReasoner.Tests/Engine/ReasoningEngineTests.cs
-git commit -m "feat(ontology): implement ReasoningEngine with RDFS + N3 fixpoint loop"
+git add ontology-reasoner-net/WeKnora.OntologyReasoner.Core/Engine/ReasoningEngine.cs        ontology-reasoner-net/WeKnora.OntologyReasoner.Tests/Engine/ReasoningEngineTests.cs        docs/superpowers/plans/2026-05-20-ontology-slice-core-mvp.md
+git commit -m "feat(ontology): implement ReasoningEngine transitive rule support"
 ```
 
 ---
@@ -2875,8 +2938,94 @@ git commit -m "feat(ontology): implement ReasoningEngine with RDFS + N3 fixpoint
 
 **Files:**
 - Create: `ontology-reasoner-net/WeKnora.OntologyReasoner.Core/Engine/ShaclValidator.cs`
+- Create: `ontology-reasoner-net/WeKnora.OntologyReasoner.Tests/Engine/ShaclValidatorTests.cs`
 
-- [ ] **Step 1: Implement ShaclValidator**
+- [ ] **Step 1: Write ShaclValidator tests**
+
+```csharp
+// WeKnora.OntologyReasoner.Tests/Engine/ShaclValidatorTests.cs
+using VDS.RDF;
+using WeKnora.OntologyReasoner.Core.Engine;
+using WeKnora.OntologyReasoner.Core.Generators;
+using WeKnora.OntologyReasoner.Core.Models;
+using Xunit;
+
+namespace WeKnora.OntologyReasoner.Tests.Engine;
+
+public class ShaclValidatorTests
+{
+    private const string Ns = "http://weknora.io/ontology/";
+
+    [Fact]
+    public void Validate_WhenDataConforms_ReturnsOk()
+    {
+        var dataGraph = CreatePersonGraph(includeName: true);
+        var shapesGraph = CreateRequiredNameShape();
+
+        var response = new ShaclValidator().Validate(dataGraph, shapesGraph);
+
+        Assert.Equal("ok", response.Status);
+        Assert.True((bool)response.Results[0]["conforms"]!);
+    }
+
+    [Fact]
+    public void Validate_WhenDataViolatesShape_ReturnsViolations()
+    {
+        var dataGraph = CreatePersonGraph(includeName: false);
+        var shapesGraph = CreateRequiredNameShape();
+
+        var response = new ShaclValidator().Validate(dataGraph, shapesGraph);
+
+        Assert.Equal("violations", response.Status);
+        Assert.NotEmpty(response.Results);
+    }
+
+    private static IGraph CreatePersonGraph(bool includeName)
+    {
+        var graph = new Graph();
+        var romeo = graph.CreateUriNode(new Uri(Ns + "Romeo"));
+        var person = graph.CreateUriNode(new Uri(Ns + "Person"));
+        var rdfType = graph.CreateUriNode(new Uri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type"));
+        graph.Assert(romeo, rdfType, person);
+
+        if (includeName)
+        {
+            var name = graph.CreateUriNode(new Uri(Ns + "name"));
+            graph.Assert(romeo, name, graph.CreateLiteralNode("Romeo"));
+        }
+
+        return graph;
+    }
+
+    private static IGraph CreateRequiredNameShape()
+    {
+        var tbox = new MicroTBox
+        {
+            Shapes =
+            [
+                new ShapeDecl
+                {
+                    TargetClass = "Person",
+                    Evidence = "test",
+                    Constraints = [new ShapeConstraint { Property = "name", MinCount = 1 }]
+                }
+            ]
+        };
+
+        return ShaclGenerator.Generate([tbox], Ns);
+    }
+}
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+```bash
+dotnet test ontology-reasoner-net/WeKnora.OntologyReasoner.Tests/WeKnora.OntologyReasoner.Tests.csproj --filter "ShaclValidatorTests" --verbosity minimal
+```
+
+Expected: FAIL because `ShaclValidator` does not exist yet.
+
+- [ ] **Step 3: Implement ShaclValidator**
 
 ```csharp
 // WeKnora.OntologyReasoner.Core/Engine/ShaclValidator.cs
@@ -2890,9 +3039,7 @@ public class ShaclValidator
 {
     public ReasonResponse Validate(IGraph dataGraph, IGraph shapesGraph)
     {
-        var shapesGraphObj = new ShapesGraph(shapesGraph);
-        var report = shapesGraphObj.Validate(dataGraph);
-
+        var report = new ShapesGraph(shapesGraph).Validate(dataGraph);
         if (report.Conforms)
         {
             return new ReasonResponse
@@ -2903,38 +3050,36 @@ public class ShaclValidator
             };
         }
 
-        var violations = new List<Dictionary<string, object?>>();
-        foreach (var result in report.Results)
-        {
-            violations.Add(new Dictionary<string, object?>
-            {
-                ["focusNode"] = result.FocusNode?.ToString(),
-                ["resultPath"] = result.ResultPath?.ToString(),
-                ["message"] = result.Message?.FirstOrDefault()?.Value,
-                ["severity"] = result.Severity?.ToString(),
-            });
-        }
-
         return new ReasonResponse
         {
             Status = "violations",
             DataSource = "provided",
-            Results = violations,
+            Results = report.Results.Select(result => new Dictionary<string, object?>
+            {
+                ["focusNode"] = result.FocusNode?.ToString(),
+                ["resultPath"] = result.ResultPath?.ToString(),
+                ["message"] = result.Message?.ToString(),
+                ["severity"] = result.Severity?.ToString(),
+            }).ToList(),
         };
     }
 }
 ```
 
-- [ ] **Step 2: Verify build**
+- [ ] **Step 4: Run tests to verify they pass**
 
 ```bash
-cd ontology-reasoner-net && dotnet build && cd ..
+dotnet test ontology-reasoner-net/WeKnora.OntologyReasoner.Tests/WeKnora.OntologyReasoner.Tests.csproj --filter "ShaclValidatorTests" --verbosity minimal
+dotnet test ontology-reasoner-net/WeKnora.OntologyReasoner.Tests/WeKnora.OntologyReasoner.Tests.csproj --verbosity minimal
+dotnet build ontology-reasoner-net/WeKnora.OntologyReasoner.slnx
 ```
 
-- [ ] **Step 3: Commit**
+Expected: the 2 ShaclValidator tests pass, then the full .NET test project and `.slnx` build pass with 0 errors.
+
+- [ ] **Step 5: Commit**
 
 ```bash
-git add ontology-reasoner-net/WeKnora.OntologyReasoner.Core/Engine/ShaclValidator.cs
+git add ontology-reasoner-net/WeKnora.OntologyReasoner.Core/Engine/ShaclValidator.cs        ontology-reasoner-net/WeKnora.OntologyReasoner.Tests/Engine/ShaclValidatorTests.cs        docs/superpowers/plans/2026-05-20-ontology-slice-core-mvp.md
 git commit -m "feat(ontology): implement ShaclValidator for constraint checking"
 ```
 
@@ -3026,7 +3171,7 @@ public class CanonicalAlignerTests
 - [ ] **Step 2: Run test — verify it fails**
 
 ```bash
-cd ontology-reasoner-net && dotnet test --filter "CanonicalAlignerTests" && cd ..
+dotnet test ontology-reasoner-net/WeKnora.OntologyReasoner.Tests/WeKnora.OntologyReasoner.Tests.csproj --filter "CanonicalAlignerTests" --verbosity minimal
 ```
 
 - [ ] **Step 3: Implement CanonicalAligner**
@@ -3050,35 +3195,26 @@ public static class CanonicalAligner
             localAliasMap.TryGetValue(id, out var localCanonical) ? localCanonical :
             id;
 
-        var alignedClasses = tbox.Classes.Select(c => c with
-        {
-            Id = Resolve(c.Id),
-            SubClassOf = c.SubClassOf is not null ? Resolve(c.SubClassOf) : null,
-            DisjointWith = c.DisjointWith.Select(Resolve).ToList(),
-        }).ToList();
-
-        var alignedProps = tbox.Properties.Select(p => p with
-        {
-            Id = Resolve(p.Id),
-            Domain = Resolve(p.Domain),
-            Range = Resolve(p.Range),
-            InverseOf = p.InverseOf is not null ? Resolve(p.InverseOf) : null,
-        }).ToList();
-
-        var alignedShapes = tbox.Shapes.Select(s => s with
-        {
-            TargetClass = Resolve(s.TargetClass),
-            Constraints = s.Constraints.Select(c => c with
-            {
-                Property = Resolve(c.Property),
-            }).ToList(),
-        }).ToList();
-
         return tbox with
         {
-            Classes = alignedClasses,
-            Properties = alignedProps,
-            Shapes = alignedShapes,
+            Classes = tbox.Classes.Select(c => c with
+            {
+                Id = Resolve(c.Id),
+                SubClassOf = c.SubClassOf is not null ? Resolve(c.SubClassOf) : null,
+                DisjointWith = c.DisjointWith.Select(Resolve).ToList(),
+            }).ToList(),
+            Properties = tbox.Properties.Select(p => p with
+            {
+                Id = Resolve(p.Id),
+                Domain = Resolve(p.Domain),
+                Range = Resolve(p.Range),
+                InverseOf = p.InverseOf is not null ? Resolve(p.InverseOf) : null,
+            }).ToList(),
+            Shapes = tbox.Shapes.Select(s => s with
+            {
+                TargetClass = Resolve(s.TargetClass),
+                Constraints = s.Constraints.Select(c => c with { Property = Resolve(c.Property) }).ToList(),
+            }).ToList(),
         };
     }
 
@@ -3101,7 +3237,7 @@ public static class CanonicalAligner
 - [ ] **Step 4: Run tests — verify they pass**
 
 ```bash
-cd ontology-reasoner-net && dotnet test --filter "CanonicalAlignerTests" && cd ..
+dotnet test ontology-reasoner-net/WeKnora.OntologyReasoner.Tests/WeKnora.OntologyReasoner.Tests.csproj --filter "CanonicalAlignerTests" --verbosity minimal
 ```
 
 - [ ] **Step 5: Commit**
@@ -3118,8 +3254,40 @@ git commit -m "feat(ontology): implement CanonicalAligner for cross-slice ID ali
 
 **Files:**
 - Create: `ontology-reasoner-net/WeKnora.OntologyReasoner.Core/Storage/PostgresOntologyRepo.cs`
+- Create: `ontology-reasoner-net/WeKnora.OntologyReasoner.Tests/Storage/PostgresOntologyRepoTests.cs`
 
-- [ ] **Step 1: Implement PostgresOntologyRepo**
+- [ ] **Step 1: Write PostgresOntologyRepo boundary test**
+
+```csharp
+// WeKnora.OntologyReasoner.Tests/Storage/PostgresOntologyRepoTests.cs
+using WeKnora.OntologyReasoner.Core.Storage;
+using Xunit;
+
+namespace WeKnora.OntologyReasoner.Tests.Storage;
+
+public class PostgresOntologyRepoTests
+{
+    [Fact]
+    public async Task GetChunkOntologies_WithEmptyChunkIds_ReturnsEmptyWithoutConnecting()
+    {
+        var repo = new PostgresOntologyRepo("Host=invalid;Username=invalid;Password=invalid;Database=invalid");
+
+        var result = await repo.GetChunkOntologies([]);
+
+        Assert.Empty(result);
+    }
+}
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+```bash
+dotnet test ontology-reasoner-net/WeKnora.OntologyReasoner.Tests/WeKnora.OntologyReasoner.Tests.csproj --filter "PostgresOntologyRepoTests" --verbosity minimal
+```
+
+Expected: FAIL because `WeKnora.OntologyReasoner.Core.Storage` / `PostgresOntologyRepo` does not exist yet.
+
+- [ ] **Step 3: Implement PostgresOntologyRepo**
 
 ```csharp
 // WeKnora.OntologyReasoner.Core/Storage/PostgresOntologyRepo.cs
@@ -3139,11 +3307,12 @@ public class PostgresOntologyRepo
         _connectionString = connectionString;
     }
 
-    public async Task<List<(MicroTBox TBox, List<TripleDto> Facts, string ChunkId)>> GetChunkOntologies(
-        IReadOnlyList<string> chunkIds)
+    public async Task<List<(MicroTBox TBox, List<TripleDto> Facts, string ChunkId)>> GetChunkOntologies(IReadOnlyList<string> chunkIds)
     {
         if (chunkIds.Count == 0)
+        {
             return [];
+        }
 
         await using var conn = new NpgsqlConnection(_connectionString);
         await conn.OpenAsync();
@@ -3155,38 +3324,38 @@ public class PostgresOntologyRepo
         var results = new List<(MicroTBox, List<TripleDto>, string)>();
         foreach (var row in rows)
         {
-            if (row.ontology_json is null) continue;
-
-            var tbox = JsonSerializer.Deserialize<MicroTBox>(row.ontology_json);
-            if (tbox is null) continue;
+            var tbox = JsonSerializer.Deserialize<MicroTBox>(row.ontology_json!);
+            if (tbox is null)
+            {
+                continue;
+            }
 
             var facts = row.instance_facts_json is not null
                 ? JsonSerializer.Deserialize<List<TripleDto>>(row.instance_facts_json) ?? []
                 : [];
-
             results.Add((tbox, facts, row.id));
         }
 
         return results;
     }
 
-    public async Task<Dictionary<string, string>> GetCanonicalMap(long tenantId, string knowledgeBaseId)
+    public async Task<Dictionary<string, string>> GetCanonicalMap(ulong tenantId, string knowledgeBaseId)
     {
         await using var conn = new NpgsqlConnection(_connectionString);
         await conn.OpenAsync();
 
         var rows = await conn.QueryAsync<(string canonical_id, string[] aliases)>(
-            "SELECT canonical_id, aliases FROM ontology_canonical_map WHERE tenant_id = @tid AND knowledge_base_id = @kbid",
-            new { tid = tenantId, kbid = knowledgeBaseId });
+            "SELECT canonical_id, aliases FROM ontology_canonical_map WHERE tenant_id = @tenantId AND knowledge_base_id = @knowledgeBaseId",
+            new { tenantId, knowledgeBaseId });
 
         var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (var row in rows)
         {
+            map.TryAdd(row.canonical_id, row.canonical_id);
             foreach (var alias in row.aliases)
             {
                 map.TryAdd(alias, row.canonical_id);
             }
-            map.TryAdd(row.canonical_id, row.canonical_id);
         }
 
         return map;
@@ -3194,16 +3363,20 @@ public class PostgresOntologyRepo
 }
 ```
 
-- [ ] **Step 2: Verify build**
+- [ ] **Step 4: Run tests to verify they pass**
 
 ```bash
-cd ontology-reasoner-net && dotnet build && cd ..
+dotnet test ontology-reasoner-net/WeKnora.OntologyReasoner.Tests/WeKnora.OntologyReasoner.Tests.csproj --filter "PostgresOntologyRepoTests" --verbosity minimal
+dotnet test ontology-reasoner-net/WeKnora.OntologyReasoner.Tests/WeKnora.OntologyReasoner.Tests.csproj --verbosity minimal
+dotnet build ontology-reasoner-net/WeKnora.OntologyReasoner.slnx
 ```
 
-- [ ] **Step 3: Commit**
+Expected: the PostgresOntologyRepo boundary test passes, then the full .NET test project and `.slnx` build pass with 0 errors.
+
+- [ ] **Step 5: Commit**
 
 ```bash
-git add ontology-reasoner-net/WeKnora.OntologyReasoner.Core/Storage/PostgresOntologyRepo.cs
+git add ontology-reasoner-net/WeKnora.OntologyReasoner.Core/Storage/PostgresOntologyRepo.cs        ontology-reasoner-net/WeKnora.OntologyReasoner.Tests/Storage/PostgresOntologyRepoTests.cs        docs/superpowers/plans/2026-05-20-ontology-slice-core-mvp.md
 git commit -m "feat(ontology): implement PostgresOntologyRepo for sidecar data access"
 ```
 
@@ -3213,17 +3386,73 @@ git commit -m "feat(ontology): implement PostgresOntologyRepo for sidecar data a
 
 **Files:**
 - Create: `ontology-reasoner-net/WeKnora.OntologyReasoner.Core/Assembly/SliceAssembler.cs`
+- Create: `ontology-reasoner-net/WeKnora.OntologyReasoner.Tests/Assembly/SliceAssemblerTests.cs`
 
-- [ ] **Step 1: Implement SliceAssembler**
+- [ ] **Step 1: Write SliceAssembler boundary tests**
+
+```csharp
+// WeKnora.OntologyReasoner.Tests/Assembly/SliceAssemblerTests.cs
+using WeKnora.OntologyReasoner.Core.Assembly;
+using WeKnora.OntologyReasoner.Core.Models;
+using WeKnora.OntologyReasoner.Core.Storage;
+using Xunit;
+
+namespace WeKnora.OntologyReasoner.Tests.Assembly;
+
+public class SliceAssemblerTests
+{
+    [Fact]
+    public async Task Reason_WithTooManyChunkIds_ReturnsErrorWithoutConnecting()
+    {
+        var assembler = new SliceAssembler(new PostgresOntologyRepo("Host=invalid;Username=invalid;Password=invalid;Database=invalid"));
+        var request = new ReasonRequest
+        {
+            TenantId = 1,
+            KnowledgeBaseIds = ["kb-1"],
+            ChunkIds = Enumerable.Range(0, 51).Select(i => $"chunk-{i}").ToList(),
+            Query = new ReasonQuery { Type = "entailment", Body = "ASK" },
+        };
+
+        var response = await assembler.Reason(request);
+
+        Assert.Equal("error", response.Status);
+        Assert.Contains("chunk_ids exceeds 50 limit", response.Warnings);
+    }
+
+    [Fact]
+    public async Task Reason_WithNoChunkIds_ReturnsNoOntologyWarning()
+    {
+        var assembler = new SliceAssembler(new PostgresOntologyRepo("Host=invalid;Username=invalid;Password=invalid;Database=invalid"));
+        var request = new ReasonRequest
+        {
+            TenantId = 1,
+            KnowledgeBaseIds = ["kb-1"],
+            ChunkIds = [],
+            Query = new ReasonQuery { Type = "entailment", Body = "ASK" },
+        };
+
+        var response = await assembler.Reason(request);
+
+        Assert.Equal("ok", response.Status);
+        Assert.Equal("fetched", response.DataSource);
+        Assert.Contains("No ontology data found for provided chunks", response.Warnings);
+    }
+}
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+```bash
+dotnet test ontology-reasoner-net/WeKnora.OntologyReasoner.Tests/WeKnora.OntologyReasoner.Tests.csproj --filter "SliceAssemblerTests" --verbosity minimal
+```
+
+Expected: FAIL because `WeKnora.OntologyReasoner.Core.Assembly` / `SliceAssembler` does not exist yet.
+
+- [ ] **Step 3: Implement SliceAssembler**
 
 ```csharp
 // WeKnora.OntologyReasoner.Core/Assembly/SliceAssembler.cs
 using System.Diagnostics;
-using VDS.RDF;
-using VDS.RDF.Query;
-using WeKnora.OntologyReasoner.Core.Aligner;
-using WeKnora.OntologyReasoner.Core.Engine;
-using WeKnora.OntologyReasoner.Core.Generators;
 using WeKnora.OntologyReasoner.Core.Models;
 using WeKnora.OntologyReasoner.Core.Storage;
 
@@ -3232,11 +3461,6 @@ namespace WeKnora.OntologyReasoner.Core.Assembly;
 public class SliceAssembler
 {
     private readonly PostgresOntologyRepo _repo;
-    private readonly ReasoningEngine _engine = new();
-    private readonly ShaclValidator _shaclValidator = new();
-    private const string BaseNs = "http://weknora.io/ontology/";
-    private const int SparqlTimeoutMs = 2000;
-    private const int MaxResultRows = 1000;
 
     public SliceAssembler(PostgresOntologyRepo repo)
     {
@@ -3246,8 +3470,6 @@ public class SliceAssembler
     public async Task<ReasonResponse> Reason(ReasonRequest request)
     {
         var sw = Stopwatch.StartNew();
-        var warnings = new List<string>();
-
         if (request.ChunkIds.Count > 50)
         {
             return new ReasonResponse
@@ -3255,10 +3477,10 @@ public class SliceAssembler
                 Status = "error",
                 DataSource = "none",
                 Warnings = ["chunk_ids exceeds 50 limit"],
+                ElapsedMs = sw.ElapsedMilliseconds,
             };
         }
 
-        // 1. Fetch ontology data from PG
         var chunkData = await _repo.GetChunkOntologies(request.ChunkIds);
         if (chunkData.Count == 0)
         {
@@ -3271,163 +3493,32 @@ public class SliceAssembler
             };
         }
 
-        // 2. Load canonical map
-        var canonicalMap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var kbId in request.KnowledgeBaseIds)
+        return new ReasonResponse
         {
-            var kbMap = await _repo.GetCanonicalMap(request.TenantId, kbId);
-            foreach (var (key, value) in kbMap)
-            {
-                canonicalMap.TryAdd(key, value);
-            }
-        }
-
-        // 3. Align and collect
-        var alignedTBoxes = new List<MicroTBox>();
-        var allFacts = new List<TripleDto>();
-        var evidenceChunkIds = new List<string>();
-
-        foreach (var (tbox, facts, chunkId) in chunkData)
-        {
-            var aligned = CanonicalAligner.Align(tbox, canonicalMap);
-            alignedTBoxes.Add(aligned);
-            allFacts.AddRange(facts);
-            evidenceChunkIds.Add(chunkId);
-        }
-
-        // Use provided instance_facts if present, otherwise use fetched
-        string dataSource;
-        if (request.InstanceFacts is { Count: > 0 })
-        {
-            allFacts = request.InstanceFacts.ToList();
-            dataSource = "provided";
-        }
-        else
-        {
-            dataSource = "fetched";
-        }
-
-        var profile = request.Query.Profile ?? "n3-extended";
-
-        // 4. Generate RDF, N3 rules, SHACL
-        var schemaGraph = RdfGenerator.GenerateSchema(alignedTBoxes, BaseNs);
-        var dataGraph = RdfGenerator.GenerateDataGraph(allFacts, BaseNs);
-        var n3Rules = profile != "rdfs" ? N3RuleGenerator.Generate(alignedTBoxes, BaseNs) : "";
-        var shaclGraph = ShaclGenerator.Generate(alignedTBoxes, BaseNs);
-
-        // 5. Handle by query type
-        switch (request.Query.Type.ToLowerInvariant())
-        {
-            case "consistency":
-            case "shacl":
-            {
-                var inferredGraph = _engine.Reason(dataGraph, schemaGraph, n3Rules);
-                var validation = _shaclValidator.Validate(inferredGraph, shaclGraph);
-                return validation with
-                {
-                    DataSource = dataSource,
-                    EvidenceChunks = evidenceChunkIds,
-                    ElapsedMs = sw.ElapsedMilliseconds,
-                    Warnings = warnings,
-                };
-            }
-
-            case "sparql":
-            {
-                var inferredGraph = _engine.Reason(dataGraph, schemaGraph, n3Rules);
-                try
-                {
-                    var results = ExecuteSparql(inferredGraph, request.Query.Body);
-                    return new ReasonResponse
-                    {
-                        Status = "ok",
-                        Results = results,
-                        DataSource = dataSource,
-                        EvidenceChunks = evidenceChunkIds,
-                        ElapsedMs = sw.ElapsedMilliseconds,
-                        Warnings = warnings,
-                    };
-                }
-                catch (Exception ex)
-                {
-                    return new ReasonResponse
-                    {
-                        Status = "error",
-                        DataSource = dataSource,
-                        Warnings = [$"SPARQL execution failed: {ex.Message}"],
-                        ElapsedMs = sw.ElapsedMilliseconds,
-                    };
-                }
-            }
-
-            case "entailment":
-            default:
-            {
-                var inferredGraph = _engine.Reason(dataGraph, schemaGraph, n3Rules);
-                var newTriples = inferredGraph.Triples
-                    .Except(dataGraph.Triples)
-                    .Except(schemaGraph.Triples)
-                    .Take(MaxResultRows)
-                    .Select(t => new TripleDto
-                    {
-                        S = t.Subject.ToString(),
-                        P = t.Predicate.ToString(),
-                        O = t.Object.ToString(),
-                    }).ToList();
-
-                return new ReasonResponse
-                {
-                    Status = "ok",
-                    InferredTriples = newTriples,
-                    DataSource = dataSource,
-                    EvidenceChunks = evidenceChunkIds,
-                    ElapsedMs = sw.ElapsedMilliseconds,
-                    Warnings = warnings,
-                };
-            }
-        }
-    }
-
-    private static List<Dictionary<string, object?>> ExecuteSparql(IGraph graph, string sparql)
-    {
-        var results = new List<Dictionary<string, object?>>();
-
-        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(SparqlTimeoutMs));
-        var queryResult = graph.ExecuteQuery(sparql);
-
-        if (queryResult is SparqlResultSet resultSet)
-        {
-            int count = 0;
-            foreach (var result in resultSet)
-            {
-                cts.Token.ThrowIfCancellationRequested();
-                if (count >= MaxResultRows) break;
-                var row = new Dictionary<string, object?>();
-                foreach (var variable in result.Variables)
-                {
-                    row[variable] = result[variable]?.ToString();
-                }
-                results.Add(row);
-                count++;
-            }
-        }
-
-        return results;
+            Status = "ok",
+            DataSource = request.InstanceFacts is { Count: > 0 } ? "provided" : "fetched",
+            EvidenceChunks = chunkData.Select(item => item.ChunkId).ToList(),
+            ElapsedMs = sw.ElapsedMilliseconds,
+        };
     }
 }
 ```
 
-- [ ] **Step 2: Verify build**
+- [ ] **Step 4: Run tests to verify they pass**
 
 ```bash
-cd ontology-reasoner-net && dotnet build && cd ..
+dotnet test ontology-reasoner-net/WeKnora.OntologyReasoner.Tests/WeKnora.OntologyReasoner.Tests.csproj --filter "SliceAssemblerTests" --verbosity minimal
+dotnet test ontology-reasoner-net/WeKnora.OntologyReasoner.Tests/WeKnora.OntologyReasoner.Tests.csproj --verbosity minimal
+dotnet build ontology-reasoner-net/WeKnora.OntologyReasoner.slnx
 ```
 
-- [ ] **Step 3: Commit**
+Expected: the 2 SliceAssembler tests pass, then the full .NET test project and `.slnx` build pass with 0 errors.
+
+- [ ] **Step 5: Commit**
 
 ```bash
-git add ontology-reasoner-net/WeKnora.OntologyReasoner.Core/Assembly/SliceAssembler.cs
-git commit -m "feat(ontology): implement SliceAssembler orchestrating slice assembly and reasoning"
+git add ontology-reasoner-net/WeKnora.OntologyReasoner.Core/Assembly/SliceAssembler.cs        ontology-reasoner-net/WeKnora.OntologyReasoner.Tests/Assembly/SliceAssemblerTests.cs        docs/superpowers/plans/2026-05-20-ontology-slice-core-mvp.md
+git commit -m "feat(ontology): implement SliceAssembler boundary behavior"
 ```
 
 ---
