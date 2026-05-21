@@ -31,6 +31,7 @@ require (
 	github.com/joho/godotenv v1.5.1
 	github.com/ks3sdklib/aws-sdk-go v1.11.0
 	github.com/larksuite/oapi-sdk-go/v3 v3.6.1
+	github.com/lib/pq v1.10.9
 	github.com/longbridgeapp/opencc v0.3.13
 	github.com/mark3labs/mcp-go v0.52.0
 	github.com/milvus-io/milvus/client/v2 v2.6.4
@@ -217,7 +218,6 @@ require (
 	github.com/leaanthony/slicer v1.6.0 // indirect
 	github.com/leaanthony/u v1.1.1 // indirect
 	github.com/leodido/go-urn v1.4.0 // indirect
-	github.com/lib/pq v1.10.9 // indirect
 	github.com/liuzl/cedar-go v0.0.0-20170805034717-80a9c64b256d // indirect
 	github.com/liuzl/da v0.0.0-20180704015230-14771aad5b1d // indirect
 	github.com/lufia/plan9stats v0.0.0-20260330125221-c963978e514e // indirect

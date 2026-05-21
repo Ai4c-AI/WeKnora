@@ -22,7 +22,9 @@
 | `migrations/versioned/000052_chunk_ontology.down.sql` | Rollback 000052 |
 | `migrations/versioned/000053_ontology_canonical_map.up.sql` | Create ontology_canonical_map table |
 | `migrations/versioned/000053_ontology_canonical_map.down.sql` | Rollback 000053 |
-| `internal/repo/canonical_map_repo.go` | CanonicalMapRepository interface + PG implementation |
+| `internal/types/canonical_map.go` | CanonicalMapEntry model + canonical map kind constants |
+| `internal/types/interfaces/canonical_map.go` | CanonicalMapRepository interface |
+| `internal/application/repository/canonical_map.go` | GORM-backed CanonicalMapRepository implementation |
 | `internal/agent/tools/ontology_reason.go` | OntologyReasonTool agent tool |
 | `internal/application/service/ontology_client.go` | HTTP client for .NET sidecar |
 
@@ -666,100 +668,184 @@ git commit -m "feat(ontology): add micro-TBox extraction prompt template"
 ### Task 6: CanonicalMapRepository
 
 **Files:**
-- Create: `internal/repo/canonical_map_repo.go`
 
-- [ ] **Step 1: Check existing repo patterns**
+- Create: `internal/types/canonical_map.go`
+- Create: `internal/types/interfaces/canonical_map.go`
+- Create: `internal/application/repository/canonical_map.go`
+- Modify: `internal/container/container.go`
 
-Run: `ls internal/repo/` to see existing repository files and patterns.
+- [ ] **Step 1: Follow existing repository patterns**
 
-- [ ] **Step 2: Create CanonicalMapRepository interface and implementation**
+Existing repositories put data models in `internal/types`, interfaces in `internal/types/interfaces`, GORM implementations in `internal/application/repository`, and DI registration in `internal/container/container.go`. Do not create an independent `internal/repo` package.
+
+- [ ] **Step 2: Create CanonicalMapEntry model**
 
 ```go
-// internal/repo/canonical_map_repo.go
-package repo
+// internal/types/canonical_map.go
+package types
 
 import (
-	"context"
+    "time"
 
-	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
+    "github.com/lib/pq"
+)
+
+type CanonicalMapKind string
+
+const (
+    CanonicalMapKindClass    CanonicalMapKind = "class"
+    CanonicalMapKindProperty CanonicalMapKind = "property"
 )
 
 type CanonicalMapEntry struct {
-	ID              int64    `gorm:"primaryKey;autoIncrement"`
-	TenantID        int64    `gorm:"not null"`
-	KnowledgeBaseID string   `gorm:"not null"`
-	Kind            string   `gorm:"not null"`
-	CanonicalID     string   `gorm:"not null"`
-	Aliases         pq.StringArray `gorm:"type:text[]"`
-	SourceChunks    pq.StringArray `gorm:"type:text[]"`
-	Confidence      float32  `gorm:"not null;default:0.5"`
+    ID              int64            `json:"id"                gorm:"primaryKey;autoIncrement"`
+    TenantID        uint64           `json:"tenant_id"         gorm:"not null"`
+    KnowledgeBaseID string           `json:"knowledge_base_id" gorm:"not null"`
+    Kind            CanonicalMapKind `json:"kind"              gorm:"type:text;not null"`
+    CanonicalID     string           `json:"canonical_id"      gorm:"not null"`
+    Aliases         pq.StringArray   `json:"aliases"           gorm:"type:text[];not null;default:'{}'"`
+    SourceChunks    pq.StringArray   `json:"source_chunks"     gorm:"type:text[];not null;default:'{}'"`
+    Confidence      float32          `json:"confidence"        gorm:"not null;default:0.5"`
+    CreatedAt       time.Time        `json:"created_at"`
+    UpdatedAt       time.Time        `json:"updated_at"`
 }
 
 func (CanonicalMapEntry) TableName() string {
-	return "ontology_canonical_map"
-}
-
-type CanonicalMapRepository interface {
-	Upsert(ctx context.Context, tenantID int64, kbID, canonicalID string, aliases []string, chunkID string) error
-	GetByKB(ctx context.Context, tenantID int64, kbID string) ([]CanonicalMapEntry, error)
-}
-
-type canonicalMapRepo struct {
-	db *gorm.DB
-}
-
-func NewCanonicalMapRepository(db *gorm.DB) CanonicalMapRepository {
-	return &canonicalMapRepo{db: db}
-}
-
-func (r *canonicalMapRepo) Upsert(ctx context.Context, tenantID int64, kbID, canonicalID string, aliases []string, chunkID string) error {
-	entry := CanonicalMapEntry{
-		TenantID:        tenantID,
-		KnowledgeBaseID: kbID,
-		Kind:            "class",
-		CanonicalID:     canonicalID,
-		Aliases:         aliases,
-		SourceChunks:    []string{chunkID},
-		Confidence:      0.5,
-	}
-
-	return r.db.WithContext(ctx).
-		Clauses(clause.OnConflict{
-			Columns: []clause.Column{
-				{Name: "tenant_id"},
-				{Name: "knowledge_base_id"},
-				{Name: "kind"},
-				{Name: "canonical_id"},
-			},
-			DoUpdates: clause.Assignments(map[string]interface{}{
-				"aliases":       gorm.Expr("array(SELECT DISTINCT unnest FROM unnest(ontology_canonical_map.aliases || ?))", pq.StringArray(aliases)),
-				"source_chunks": gorm.Expr("array(SELECT DISTINCT unnest FROM unnest(ontology_canonical_map.source_chunks || ARRAY[?]))", chunkID),
-				"updated_at":    gorm.Expr("NOW()"),
-			}),
-		}).Create(&entry).Error
-}
-
-func (r *canonicalMapRepo) GetByKB(ctx context.Context, tenantID int64, kbID string) ([]CanonicalMapEntry, error) {
-	var entries []CanonicalMapEntry
-	err := r.db.WithContext(ctx).
-		Where("tenant_id = ? AND knowledge_base_id = ?", tenantID, kbID).
-		Find(&entries).Error
-	return entries, err
+    return "ontology_canonical_map"
 }
 ```
 
-Note: Import `github.com/lib/pq` for `pq.StringArray`. Check if the project already uses `pq` — if it uses `pgx` instead, use `pgtype.TextArray` or a custom type. Verify by running: `grep -r "lib/pq\|pgx" go.mod`
+- [ ] **Step 3: Create CanonicalMapRepository interface**
 
-- [ ] **Step 3: Verify compilation**
+```go
+// internal/types/interfaces/canonical_map.go
+package interfaces
 
-Run: `go build ./internal/repo/...`
-Expected: Clean build.
+import (
+    "context"
 
-- [ ] **Step 4: Commit**
+    "github.com/Tencent/WeKnora/internal/types"
+)
+
+type CanonicalMapRepository interface {
+    Upsert(
+        ctx context.Context,
+        tenantID uint64,
+        kbID string,
+        kind types.CanonicalMapKind,
+        canonicalID string,
+        aliases []string,
+        chunkID string,
+    ) error
+    GetByKB(ctx context.Context, tenantID uint64, kbID string) ([]types.CanonicalMapEntry, error)
+}
+```
+
+- [ ] **Step 4: Create GORM-backed implementation**
+
+```go
+// internal/application/repository/canonical_map.go
+package repository
+
+import (
+    "context"
+
+    "github.com/Tencent/WeKnora/internal/types"
+    "github.com/Tencent/WeKnora/internal/types/interfaces"
+    "github.com/lib/pq"
+    "gorm.io/gorm"
+    "gorm.io/gorm/clause"
+)
+
+type canonicalMapRepository struct {
+    db *gorm.DB
+}
+
+func NewCanonicalMapRepository(db *gorm.DB) interfaces.CanonicalMapRepository {
+    return &canonicalMapRepository{db: db}
+}
+
+func (r *canonicalMapRepository) Upsert(
+    ctx context.Context,
+    tenantID uint64,
+    kbID string,
+    kind types.CanonicalMapKind,
+    canonicalID string,
+    aliases []string,
+    chunkID string,
+) error {
+    aliasArray := pq.StringArray(aliases)
+    if aliasArray == nil {
+        aliasArray = pq.StringArray{}
+    }
+
+    entry := types.CanonicalMapEntry{
+        TenantID:        tenantID,
+        KnowledgeBaseID: kbID,
+        Kind:            kind,
+        CanonicalID:     canonicalID,
+        Aliases:         aliasArray,
+        SourceChunks:    pq.StringArray{chunkID},
+        Confidence:      0.5,
+    }
+
+    return r.db.WithContext(ctx).
+        Clauses(clause.OnConflict{
+            Columns: []clause.Column{
+                {Name: "tenant_id"},
+                {Name: "knowledge_base_id"},
+                {Name: "kind"},
+                {Name: "canonical_id"},
+            },
+            DoUpdates: clause.Assignments(map[string]interface{}{
+                "aliases": gorm.Expr(
+                    "ARRAY(SELECT DISTINCT alias FROM unnest(ontology_canonical_map.aliases || EXCLUDED.aliases) AS merged(alias))",
+                ),
+                "source_chunks": gorm.Expr(
+                    "ARRAY(SELECT DISTINCT chunk_id FROM unnest(ontology_canonical_map.source_chunks || EXCLUDED.source_chunks) AS merged(chunk_id))",
+                ),
+                "confidence": gorm.Expr("GREATEST(ontology_canonical_map.confidence, EXCLUDED.confidence)"),
+                "updated_at": gorm.Expr("NOW()"),
+            }),
+        }).Create(&entry).Error
+}
+
+func (r *canonicalMapRepository) GetByKB(
+    ctx context.Context,
+    tenantID uint64,
+    kbID string,
+) ([]types.CanonicalMapEntry, error) {
+    var entries []types.CanonicalMapEntry
+    err := r.db.WithContext(ctx).
+        Where("tenant_id = ? AND knowledge_base_id = ?", tenantID, kbID).
+        Find(&entries).Error
+    return entries, err
+}
+```
+
+- [ ] **Step 5: Register the repository in DI**
+
+In `internal/container/container.go`, add `repository.NewCanonicalMapRepository` next to the other repository registrations:
+
+```go
+    must(container.Provide(repository.NewChunkRepository))
+    must(container.Provide(repository.NewCanonicalMapRepository))
+    must(container.Provide(repository.NewKnowledgeTagRepository))
+```
+
+- [ ] **Step 6: Verify compilation**
+
+Run: `go build ./internal/application/repository ./internal/types ./internal/types/interfaces`
+Expected: Clean build, unless blocked by existing unrelated platform/dependency issues.
+
+- [ ] **Step 7: Commit**
 
 ```bash
-git add internal/repo/canonical_map_repo.go
+git add internal/types/canonical_map.go \
+        internal/types/interfaces/canonical_map.go \
+        internal/application/repository/canonical_map.go \
+        internal/container/container.go \
+        docs/superpowers/plans/2026-05-20-ontology-slice-core-mvp.md
 git commit -m "feat(ontology): add CanonicalMapRepository for cross-slice alignment"
 ```
 
@@ -858,13 +944,13 @@ func (b *graphBuilder) buildInstanceFacts(
 // upsertCanonicalMap persists micro-TBox aliases to the canonical_map table (spec §2.5, §8.4).
 func (b *graphBuilder) upsertCanonicalMap(
 	ctx context.Context,
-	tenantID int64,
+	tenantID uint64,
 	kbID string,
 	tbox *types.MicroTBox,
 	chunkID string,
 ) error {
 	for canonicalID, aliases := range tbox.Aliases {
-		if err := b.canonicalMapRepo.Upsert(ctx, tenantID, kbID, canonicalID, aliases, chunkID); err != nil {
+		if err := b.canonicalMapRepo.Upsert(ctx, tenantID, kbID, types.CanonicalMapKindClass, canonicalID, aliases, chunkID); err != nil {
 			return err
 		}
 	}
@@ -872,7 +958,7 @@ func (b *graphBuilder) upsertCanonicalMap(
 }
 ```
 
-Note: The `graphBuilder` struct needs a `canonicalMapRepo repo.CanonicalMapRepository` field injected. Add this field to the struct and pass it from the constructor. Also add `tenantID int64` and `kbID string` fields (or extract from chunks/context — follow the existing pattern for how graphBuilder obtains tenant and KB information).
+Note: The `graphBuilder` struct needs a `canonicalMapRepo interfaces.CanonicalMapRepository` field injected from `internal/types/interfaces`. Add this field to the struct and pass it from the constructor. Also add `tenantID uint64` and `kbID string` fields (or extract from chunks/context — follow the existing pattern for how graphBuilder obtains tenant and KB information).
 
 - [ ] **Step 4: Add callMicroTBoxLLM function (was Step 3)**
 
