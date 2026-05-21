@@ -12,5 +12,6 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\WeKnora.OntologyReasoner.Core\WeKnora.OntologyReasoner.Core.csproj" />
+    <ProjectReference Include="..\WeKnora.OntologyReasoner.Api\WeKnora.OntologyReasoner.Api.csproj" />
   </ItemGroup>
 </Project>

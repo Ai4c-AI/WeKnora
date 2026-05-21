@@ -178,6 +178,11 @@ services:
       - WEKNORA_TENANT_ENABLE_RBAC=${WEKNORA_TENANT_ENABLE_RBAC:-}
       - WEKNORA_TENANT_MAX_OWNED_PER_USER=${WEKNORA_TENANT_MAX_OWNED_PER_USER:-}
       - APK_MIRROR_ARG=${APK_MIRROR_ARG:-}
+      - ONTOLOGY_ENABLE=${ONTOLOGY_ENABLE:-false}
+      - ONTOLOGY_REASONER_URL=${ONTOLOGY_REASONER_URL:-http://ontology-reasoner:8090}
+      - ONTOLOGY_DEFAULT_PROFILE=${ONTOLOGY_DEFAULT_PROFILE:-n3-extended}
+      - ONTOLOGY_CONFIDENCE_THRESHOLD=${ONTOLOGY_CONFIDENCE_THRESHOLD:-0.3}
+      - ONTOLOGY_EXTRACT_MIN_ENTITIES=${ONTOLOGY_EXTRACT_MIN_ENTITIES:-2}
     depends_on:
       redis:
         condition: service_started
@@ -190,6 +195,29 @@ services:
     restart: unless-stopped
     extra_hosts:
       - "host.docker.internal:host-gateway"
+
+  ontology-reasoner:
+    build:
+      context: ./ontology-reasoner-net
+      dockerfile: Dockerfile
+    image: weknora/ontology-reasoner:dotnet-10
+    container_name: WeKnora-ontology-reasoner
+    ports:
+      - "${ONTOLOGY_REASONER_PORT:-8090}:8090"
+    environment:
+      - ASPNETCORE_URLS=http://+:8090
+      - ASPNETCORE_ENVIRONMENT=Production
+      - DB_CONNECTION_STRING=Host=postgres;Database=${DB_NAME:-weknora};Username=${DB_USER:-weknora};Password=${DB_PASSWORD}
+      - REASONER_DEFAULT_PROFILE=${ONTOLOGY_DEFAULT_PROFILE:-n3-extended}
+      - REASONER_MAX_ITERATIONS=10
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - WeKnora-network
+    profiles:
+      - ontology
+    restart: unless-stopped
 
   # Sandbox 镜像：仅用于 build/pull，非常驻服务；app 执行 Skills 时按需 docker run 该镜像，用毕即释
   sandbox:

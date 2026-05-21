@@ -2,13 +2,34 @@ package types
 
 import (
 	"encoding/json"
+	"sync"
 	"time"
 
 	"github.com/yanyiwu/gojieba"
 )
 
+type lazyJieba struct {
+	once sync.Once
+	jieba *gojieba.Jieba
+}
+
+func (j *lazyJieba) Cut(s string, hmm bool) []string {
+	return j.instance().Cut(s, hmm)
+}
+
+func (j *lazyJieba) CutForSearch(s string, hmm bool) []string {
+	return j.instance().CutForSearch(s, hmm)
+}
+
+func (j *lazyJieba) instance() *gojieba.Jieba {
+	j.once.Do(func() {
+		j.jieba = gojieba.NewJieba()
+	})
+	return j.jieba
+}
+
 // Jieba is a global instance of Chinese text segmentation tool
-var Jieba *gojieba.Jieba = gojieba.NewJieba()
+var Jieba = &lazyJieba{}
 
 // EvaluationStatue represents the status of an evaluation task
 type EvaluationStatue int

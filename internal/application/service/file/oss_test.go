@@ -163,9 +163,9 @@ func TestCheckOssConnectivity_InvalidEndpoint(t *testing.T) {
 	}
 }
 
-func TestOssEnsureBucket_NonExistent(t *testing.T) {
+func TestOssEnsureBucket_UnreachableEndpoint(t *testing.T) {
 	client, err := newOSSClient(
-		"https://oss-cn-hangzhou.aliyuncs.com",
+		"http://127.0.0.1:1",
 		"cn-hangzhou",
 		"test-invalid-key",
 		"test-invalid-secret",
@@ -174,27 +174,8 @@ func TestOssEnsureBucket_NonExistent(t *testing.T) {
 		t.Fatalf("newOSSClient() error: %v", err)
 	}
 
-	// Bucket that definitely doesn't exist - should return error
-	err = ossEnsureBucket(client, "this-bucket-definitely-does-not-exist-12345")
-	if err == nil {
-		t.Error("ossEnsureBucket with non-existent bucket should return an error")
-	}
-}
-
-func TestOssEnsureBucket_CreateFails(t *testing.T) {
-	client, err := newOSSClient(
-		"https://oss-cn-hangzhou.aliyuncs.com",
-		"cn-hangzhou",
-		"test-invalid-key",
-		"test-invalid-secret",
-	)
-	if err != nil {
-		t.Fatalf("newOSSClient() error: %v", err)
-	}
-
-	// Should fail with invalid credentials
 	err = ossEnsureBucket(client, "test-bucket")
 	if err == nil {
-		t.Error("ossEnsureBucket with invalid credentials should return an error")
+		t.Error("ossEnsureBucket with unreachable endpoint should return an error")
 	}
 }

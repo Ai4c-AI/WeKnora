@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -170,6 +171,12 @@ func (s *LocalSandbox) getInterpreter(scriptPath string) string {
 	ext := strings.ToLower(filepath.Ext(scriptPath))
 	switch ext {
 	case ".py":
+		if runtime.GOOS == "windows" {
+			if _, err := exec.LookPath("python"); err == nil {
+				return "python"
+			}
+			return "python3"
+		}
 		return "python3"
 	case ".sh", ".bash":
 		return "bash"
@@ -215,6 +222,14 @@ func (s *LocalSandbox) buildEnvironment(extra map[string]string) []string {
 		"HOME=/tmp",
 		"LANG=en_US.UTF-8",
 		"LC_ALL=en_US.UTF-8",
+	}
+	if runtime.GOOS == "windows" {
+		env = []string{
+			"PATH=" + os.Getenv("PATH"),
+			"USERPROFILE=" + os.Getenv("USERPROFILE"),
+			"TEMP=" + os.Getenv("TEMP"),
+			"TMP=" + os.Getenv("TMP"),
+		}
 	}
 
 	// Dangerous environment variables to exclude
