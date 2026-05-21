@@ -394,6 +394,7 @@ templates:
         "properties": [
           {"id": "wrote", "label": "wrote", "domain": "Person", "range": "Work", "characteristics": [], "inverseOf": null, "evidence": "is a tragedy written by William Shakespeare"},
           {"id": "sonOf", "label": "son of", "domain": "Person", "range": "Person", "characteristics": [], "inverseOf": null, "evidence": "Romeo Montague, son of Lord Montague"},
+          {"id": "isMemberOf", "label": "is member of", "domain": "Person", "range": "Family", "characteristics": [], "inverseOf": null, "evidence": "A member of one family cannot also be a member of the other"},
           {"id": "descendantOf", "label": "descendant of", "domain": "Person", "range": "MontagueFamily", "characteristics": ["transitive", "asymmetric"], "inverseOf": null, "evidence": "anyone who is a descendant of a Montague is themselves a Montague"}
         ],
         "shapes": [
