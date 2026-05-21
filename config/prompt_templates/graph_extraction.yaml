@@ -265,7 +265,7 @@ templates:
          normalized form of it from the input relationship list.
       3. Every extracted item MUST include an `evidence` field — a verbatim substring quoted
          from the source text. If you cannot quote the supporting text, OMIT the item.
-      4. Use {{language}} for `label` fields only. Keep `id` fields in ASCII (camelCase or
+      4. Use {{language}} for `label`, `statement`, and other free-text fields. Keep `id` fields in ASCII (camelCase or
          PascalCase). Keep `evidence` exactly as it appears in the source text.
       5. PREFER EMPTY OVER WRONG. Returning `{"classes": [], "properties": [], ...}` is the
          correct answer when the text contains no schema-level statements.
@@ -378,6 +378,7 @@ templates:
       Relationships: [
         {"source": "William Shakespeare", "target": "Romeo and Juliet", "description": "wrote"},
         {"source": "Romeo Montague", "target": "Lord Montague", "description": "son of"},
+        {"source": "Romeo Montague", "target": "Montague", "description": "descendant of"},
         {"source": "Romeo Montague", "target": "Montague", "description": "is member of"},
         {"source": "Juliet Capulet", "target": "Capulet", "description": "is member of"}
       ]
@@ -385,7 +386,7 @@ templates:
       [Output]
       {
         "classes": [
-          {"id": "Family", "label": "Family", "subClassOf": "Organization", "disjointWith": [], "evidence": "two feuding families in Verona: the Montagues and the Capulets"},
+          {"id": "Family", "label": "Family", "subClassOf": null, "disjointWith": [], "evidence": "two feuding families in Verona: the Montagues and the Capulets"},
           {"id": "MontagueFamily", "label": "Montague", "subClassOf": "Family", "disjointWith": ["CapuletFamily"], "evidence": "A member of one family cannot also be a member of the other"},
           {"id": "CapuletFamily", "label": "Capulet", "subClassOf": "Family", "disjointWith": ["MontagueFamily"], "evidence": "A member of one family cannot also be a member of the other"}
         ],
