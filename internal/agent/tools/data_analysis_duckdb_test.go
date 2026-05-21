@@ -1,3 +1,5 @@
+//go:build duckdb && cgo
+
 package tools
 
 import (

@@ -16,6 +16,7 @@ import (
 	"github.com/Tencent/WeKnora/internal/models/chat"
 	"github.com/Tencent/WeKnora/internal/models/utils"
 	"github.com/Tencent/WeKnora/internal/types"
+	"github.com/Tencent/WeKnora/internal/types/interfaces"
 	"github.com/google/uuid"
 	"golang.org/x/sync/errgroup"
 )
@@ -68,16 +69,22 @@ type graphBuilder struct {
 	entityMapByTitle map[string]*types.Entity       // Entities indexed by title
 	relationshipMap  map[string]*types.Relationship // Relationship mapping
 	chatModel        chat.Chat
+	canonicalMapRepo interfaces.CanonicalMapRepository
 	chunkGraph       map[string]map[string]*ChunkRelation // Document chunk relationship graph
 	mutex            sync.RWMutex                         // Mutex for concurrent operations
 }
 
 // NewGraphBuilder creates a new graph builder
-func NewGraphBuilder(config *config.Config, chatModel chat.Chat) types.GraphBuilder {
+func NewGraphBuilder(
+	config *config.Config,
+	chatModel chat.Chat,
+	canonicalMapRepo interfaces.CanonicalMapRepository,
+) types.GraphBuilder {
 	logger.Info(context.Background(), "Creating new graph builder")
 	return &graphBuilder{
 		config:           config,
 		chatModel:        chatModel,
+		canonicalMapRepo: canonicalMapRepo,
 		entityMap:        make(map[string]*types.Entity),
 		entityMapByTitle: make(map[string]*types.Entity),
 		relationshipMap:  make(map[string]*types.Relationship),
@@ -485,6 +492,10 @@ func (b *graphBuilder) BuildGraph(ctx context.Context, chunks []*types.Chunk) er
 	log.Info("Building chunk relationship graph")
 	b.buildChunkGraph(ctx)
 
+	if b.config.Ontology != nil && b.config.Ontology.Enabled {
+		b.extractMicroTBoxes(ctx, chunks)
+	}
+
 	log.Infof("Graph building completed in %.2f seconds: %d entities, %d relationships",
 		time.Since(startTime).Seconds(), len(b.entityMap), len(b.relationshipMap))
 
@@ -670,6 +681,235 @@ func (b *graphBuilder) buildChunkGraph(ctx context.Context) {
 	}
 
 	log.Infof("Chunk graph built with %d nodes", len(b.chunkGraph))
+}
+
+func (b *graphBuilder) entitiesForChunk(chunkID string) []*types.Entity {
+	b.mutex.RLock()
+	defer b.mutex.RUnlock()
+
+	result := make([]*types.Entity, 0)
+	for _, entity := range b.entityMap {
+		if entity == nil {
+			continue
+		}
+		if slices.Contains(entity.ChunkIDs, chunkID) {
+			result = append(result, entity)
+		}
+	}
+	return result
+}
+
+func (b *graphBuilder) relationshipsForChunk(chunkID string) []*types.Relationship {
+	b.mutex.RLock()
+	defer b.mutex.RUnlock()
+
+	result := make([]*types.Relationship, 0)
+	for _, rel := range b.relationshipMap {
+		if rel == nil {
+			continue
+		}
+		if slices.Contains(rel.ChunkIDs, chunkID) {
+			result = append(result, rel)
+		}
+	}
+	return result
+}
+
+func (b *graphBuilder) buildInstanceFacts(
+	entities []*types.Entity,
+	rels []*types.Relationship,
+) []types.Triple {
+	facts := make([]types.Triple, 0, len(entities)+len(rels))
+
+	for _, entity := range entities {
+		if entity == nil || entity.Title == "" || entity.Type == "" {
+			continue
+		}
+		facts = append(facts, types.Triple{
+			Subject:   entity.Title,
+			Predicate: "rdf:type",
+			Object:    entity.Type,
+		})
+	}
+
+	for _, rel := range rels {
+		if rel == nil || rel.Source == "" || rel.Target == "" || rel.Description == "" {
+			continue
+		}
+		facts = append(facts, types.Triple{
+			Subject:   rel.Source,
+			Predicate: rel.Description,
+			Object:    rel.Target,
+		})
+	}
+
+	return facts
+}
+
+func (b *graphBuilder) upsertCanonicalMap(
+	ctx context.Context,
+	tenantID uint64,
+	kbID string,
+	tbox *types.MicroTBox,
+	chunkID string,
+) error {
+	for canonicalID, aliases := range tbox.Aliases {
+		if err := b.canonicalMapRepo.Upsert(
+			ctx,
+			tenantID,
+			kbID,
+			types.CanonicalMapKindClass,
+			canonicalID,
+			aliases,
+			chunkID,
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (b *graphBuilder) callMicroTBoxLLM(
+	ctx context.Context,
+	chunk *types.Chunk,
+	entities []*types.Entity,
+	rels []*types.Relationship,
+) (*types.MicroTBox, error) {
+	entitiesJSON, err := json.Marshal(entities)
+	if err != nil {
+		return nil, fmt.Errorf("failed to serialize entities: %w", err)
+	}
+	relsJSON, err := json.Marshal(rels)
+	if err != nil {
+		return nil, fmt.Errorf("failed to serialize relationships: %w", err)
+	}
+
+	thinking := false
+	messages := []chat.Message{
+		{
+			Role:    "system",
+			Content: b.renderGraphExtractionPrompt(ctx, b.config.Conversation.ExtractMicroTBoxPrompt),
+		},
+		{
+			Role:    "user",
+			Content: fmt.Sprintf("Text: %s\n\nEntities: %s\n\nRelationships: %s", chunk.Content, string(entitiesJSON), string(relsJSON)),
+		},
+	}
+
+	resp, err := b.chatModel.Chat(ctx, messages, &chat.ChatOptions{
+		Temperature: DefaultLLMTemperature,
+		Thinking:    &thinking,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("LLM micro-TBox extraction failed: %w", err)
+	}
+
+	var tbox types.MicroTBox
+	if err := common.ParseLLMJsonResponse(resp.Content, &tbox); err != nil {
+		return nil, fmt.Errorf("failed to parse micro-TBox response: %w", err)
+	}
+
+	return &tbox, nil
+}
+
+func (b *graphBuilder) validateEvidence(tbox *types.MicroTBox, content string) *types.MicroTBox {
+	validClasses := make([]types.ClassDecl, 0, len(tbox.Classes))
+	for _, class := range tbox.Classes {
+		if class.Evidence != "" && strings.Contains(content, class.Evidence) {
+			validClasses = append(validClasses, class)
+		}
+	}
+	tbox.Classes = validClasses
+
+	validProps := make([]types.PropertyDecl, 0, len(tbox.Properties))
+	for _, property := range tbox.Properties {
+		if property.Evidence != "" && strings.Contains(content, property.Evidence) {
+			validProps = append(validProps, property)
+		}
+	}
+	tbox.Properties = validProps
+
+	validShapes := make([]types.ShapeDecl, 0, len(tbox.Shapes))
+	for _, shape := range tbox.Shapes {
+		if shape.Evidence != "" && strings.Contains(content, shape.Evidence) {
+			validShapes = append(validShapes, shape)
+		}
+	}
+	tbox.Shapes = validShapes
+
+	validAxioms := make([]types.FreeAxiom, 0, len(tbox.Axioms))
+	for _, axiom := range tbox.Axioms {
+		if axiom.Evidence != "" && strings.Contains(content, axiom.Evidence) {
+			validAxioms = append(validAxioms, axiom)
+		}
+	}
+	tbox.Axioms = validAxioms
+
+	return tbox
+}
+
+func (b *graphBuilder) extractMicroTBoxes(ctx context.Context, chunks []*types.Chunk) {
+	log := logger.GetLogger(ctx)
+
+	if b.config.Conversation.ExtractMicroTBoxPrompt == "" {
+		log.Warn("micro-TBox extraction prompt not configured, skipping")
+		return
+	}
+
+	minEntities := b.config.Ontology.ExtractMinEntities
+	confidenceThreshold := b.config.Ontology.ConfidenceThreshold
+
+	log.Infof("Extracting micro-TBoxes from %d chunks (minEntities=%d, threshold=%.2f)",
+		len(chunks), minEntities, confidenceThreshold)
+
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(MaxConcurrentEntityExtractions)
+
+	for _, chunk := range chunks {
+		chunk := chunk
+		g.Go(func() error {
+			chunkEntities := b.entitiesForChunk(chunk.ID)
+			chunkRels := b.relationshipsForChunk(chunk.ID)
+
+			if len(chunkEntities) < minEntities {
+				return nil
+			}
+
+			tbox, err := b.callMicroTBoxLLM(gctx, chunk, chunkEntities, chunkRels)
+			if err != nil {
+				log.WithError(err).Warnf("micro-TBox extraction failed for chunk %s", chunk.ID)
+				return nil
+			}
+
+			tbox = b.validateEvidence(tbox, chunk.Content)
+			if tbox.Confidence < confidenceThreshold {
+				return nil
+			}
+
+			chunk.OntologyJSON = tbox
+			chunk.OntologyConfidence = &tbox.Confidence
+			now := time.Now()
+			chunk.OntologyExtractedAt = &now
+			chunk.InstanceFactsJSON = b.buildInstanceFacts(chunkEntities, chunkRels)
+
+			if len(tbox.Aliases) > 0 && b.canonicalMapRepo != nil {
+				if err := b.upsertCanonicalMap(gctx, chunk.TenantID, chunk.KnowledgeBaseID, tbox, chunk.ID); err != nil {
+					log.WithError(err).Warnf("canonical map upsert failed for chunk %s", chunk.ID)
+				}
+			}
+
+			return nil
+		})
+	}
+	_ = g.Wait()
+
+	extracted := 0
+	for _, chunk := range chunks {
+		if chunk.OntologyJSON != nil {
+			extracted++
+		}
+	}
+	log.Infof("micro-TBox extraction completed: %d/%d chunks produced ontology", extracted, len(chunks))
 }
 
 // GetAllEntities returns all entities

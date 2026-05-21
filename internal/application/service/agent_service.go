@@ -402,6 +402,7 @@ func (s *agentService) registerTools(
 			tools.ToolGrepChunks:          true,
 			tools.ToolListKnowledgeChunks: true,
 			tools.ToolQueryKnowledgeGraph: true,
+			tools.ToolOntologyReason:      true,
 			tools.ToolGetDocumentInfo:     true,
 			tools.ToolDatabaseQuery:       true,
 			tools.ToolDataAnalysis:        true,
@@ -450,6 +451,7 @@ func (s *agentService) registerTools(
 		tools.ToolGrepChunks:          true,
 		tools.ToolListKnowledgeChunks: true,
 		tools.ToolQueryKnowledgeGraph: true,
+		tools.ToolOntologyReason:      true,
 		tools.ToolGetDocumentInfo:     true,
 		tools.ToolDatabaseQuery:       true,
 	}
@@ -531,6 +533,12 @@ func (s *agentService) registerTools(
 			toolToRegister = tools.NewListKnowledgeChunksTool(s.knowledgeService, s.chunkService, config.SearchTargets)
 		case tools.ToolQueryKnowledgeGraph:
 			toolToRegister = tools.NewQueryKnowledgeGraphTool(s.knowledgeBaseService)
+		case tools.ToolOntologyReason:
+			if s.cfg.Ontology != nil && s.cfg.Ontology.Enabled {
+				ontologyClient := NewOntologyClient(s.cfg.Ontology.ReasonerURL)
+				toolToRegister = tools.NewOntologyReasonTool(s.knowledgeBaseService, ontologyClient)
+				logger.Infof(ctx, "Registered ontology_reason tool (reasoner: %s)", s.cfg.Ontology.ReasonerURL)
+			}
 		case tools.ToolGetDocumentInfo:
 			toolToRegister = tools.NewGetDocumentInfoTool(s.knowledgeService, s.chunkService, config.SearchTargets)
 		case tools.ToolDatabaseQuery:

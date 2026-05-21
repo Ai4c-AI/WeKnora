@@ -3372,6 +3372,7 @@ export default {
     listKnowledgeBases: 'Список баз знаний',
     getDocumentInfo: 'Получить информацию о документе',
     queryKnowledgeGraph: 'Запрос к графу знаний',
+    ontologyReason: 'Онтологический вывод',
     think: 'Глубокое размышление',
     todoWrite: 'Составить план'
   },
@@ -3612,6 +3613,8 @@ export default {
       listChunksDesc: 'Получение полного содержимого фрагментов документа',
       queryGraph: 'Запрос графа знаний',
       queryGraphDesc: 'Запрос связей из графа знаний',
+      ontologyReason: 'Онтологический вывод',
+      ontologyReasonDesc: 'Запуск формального вывода по онтологическим срезам графа знаний',
       getDocInfo: 'Информация о документе',
       getDocInfoDesc: 'Просмотр метаданных документа',
       dbQuery: 'Запрос к базе данных',

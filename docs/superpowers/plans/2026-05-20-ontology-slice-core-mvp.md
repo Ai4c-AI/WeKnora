@@ -18,6 +18,7 @@
 | File | Responsibility |
 |------|---------------|
 | `internal/types/micro_tbox.go` | MicroTBox, ClassDecl, PropertyDecl, ShapeDecl, ShapeConstraint, FreeAxiom, Triple types |
+| `internal/types/ontology_reason.go` | Ontology sidecar request/response DTOs shared by service client and agent tool |
 | `migrations/versioned/000052_chunk_ontology.up.sql` | Add ontology columns to chunks table |
 | `migrations/versioned/000052_chunk_ontology.down.sql` | Rollback 000052 |
 | `migrations/versioned/000053_ontology_canonical_map.up.sql` | Create ontology_canonical_map table |
@@ -958,7 +959,7 @@ func (b *graphBuilder) upsertCanonicalMap(
 }
 ```
 
-Note: The `graphBuilder` struct needs a `canonicalMapRepo interfaces.CanonicalMapRepository` field injected from `internal/types/interfaces`. Add this field to the struct and pass it from the constructor. Also add `tenantID uint64` and `kbID string` fields (or extract from chunks/context — follow the existing pattern for how graphBuilder obtains tenant and KB information).
+Note: The `graphBuilder` struct needs a `canonicalMapRepo interfaces.CanonicalMapRepository` field injected from `internal/types/interfaces`. Add this field to the struct and pass it from the constructor. Do not add cached `tenantID` or `kbID` fields to `graphBuilder`; derive them from each `chunk.TenantID` and `chunk.KnowledgeBaseID` when upserting aliases.
 
 - [ ] **Step 4: Add callMicroTBoxLLM function (was Step 3)**
 
@@ -1101,7 +1102,7 @@ func (b *graphBuilder) extractMicroTBoxes(ctx context.Context, chunks []*types.C
 
 			// Auto-populate canonical_map from micro-TBox aliases (spec §2.5, §8.4)
 			if len(tbox.Aliases) > 0 && b.canonicalMapRepo != nil {
-				if err := b.upsertCanonicalMap(gctx, b.tenantID, b.kbID, tbox, chunk.ID); err != nil {
+				if err := b.upsertCanonicalMap(gctx, chunk.TenantID, chunk.KnowledgeBaseID, tbox, chunk.ID); err != nil {
 					log.WithError(err).Warnf("canonical map upsert failed for chunk %s", chunk.ID)
 				}
 			}
@@ -1149,9 +1150,42 @@ git commit -m "feat(ontology): add micro-TBox extraction to graph builder pipeli
 ### Task 8: Ontology Sidecar HTTP Client
 
 **Files:**
+
+- Create: `internal/types/ontology_reason.go`
 - Create: `internal/application/service/ontology_client.go`
 
-- [ ] **Step 1: Create the ontology sidecar HTTP client**
+- [ ] **Step 1: Create shared ontology reason DTOs**
+
+```go
+// internal/types/ontology_reason.go
+package types
+
+type OntologyReasonRequest struct {
+	TenantID         uint64        `json:"tenant_id"`
+	KnowledgeBaseIDs []string      `json:"knowledge_base_ids"`
+	ChunkIDs         []string      `json:"chunk_ids"`
+	InstanceFacts    []Triple      `json:"instance_facts,omitempty"`
+	Query            OntologyQuery `json:"query"`
+}
+
+type OntologyQuery struct {
+	Type    string `json:"type"`
+	Body    string `json:"body"`
+	Profile string `json:"profile,omitempty"`
+}
+
+type OntologyReasonResponse struct {
+	Status          string                   `json:"status"`
+	Results         []map[string]interface{} `json:"results"`
+	InferredTriples []Triple                 `json:"inferred_triples"`
+	DataSource      string                   `json:"data_source"`
+	EvidenceChunks  []string                 `json:"evidence_chunks"`
+	Warnings        []string                 `json:"warnings"`
+	ElapsedMs       int                      `json:"elapsed_ms"`
+}
+```
+
+- [ ] **Step 2: Create the ontology sidecar HTTP client**
 
 ```go
 // internal/application/service/ontology_client.go
@@ -1164,38 +1198,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
+
+	"github.com/Tencent/WeKnora/internal/types"
 )
-
-type OntologyReasonRequest struct {
-	TenantID         int64             `json:"tenant_id"`
-	KnowledgeBaseIDs []string          `json:"knowledge_base_ids"`
-	ChunkIDs         []string          `json:"chunk_ids"`
-	InstanceFacts    []OntologyTriple  `json:"instance_facts,omitempty"`
-	Query            OntologyQuery     `json:"query"`
-}
-
-type OntologyTriple struct {
-	S string `json:"s"`
-	P string `json:"p"`
-	O string `json:"o"`
-}
-
-type OntologyQuery struct {
-	Type    string `json:"type"`
-	Body    string `json:"body"`
-	Profile string `json:"profile,omitempty"`
-}
-
-type OntologyReasonResponse struct {
-	Status          string                   `json:"status"`
-	Results         []map[string]interface{} `json:"results"`
-	InferredTriples []OntologyTriple         `json:"inferred_triples"`
-	DataSource      string                   `json:"data_source"`
-	EvidenceChunks  []string                 `json:"evidence_chunks"`
-	Warnings        []string                 `json:"warnings"`
-	ElapsedMs       int                      `json:"elapsed_ms"`
-}
 
 type OntologyClient struct {
 	baseURL    string
@@ -1204,20 +1211,20 @@ type OntologyClient struct {
 
 func NewOntologyClient(baseURL string) *OntologyClient {
 	return &OntologyClient{
-		baseURL: baseURL,
+		baseURL: strings.TrimRight(baseURL, "/"),
 		httpClient: &http.Client{
 			Timeout: 10 * time.Second,
 		},
 	}
 }
 
-func (c *OntologyClient) Reason(ctx context.Context, req *OntologyReasonRequest) (*OntologyReasonResponse, error) {
+func (c *OntologyClient) Reason(ctx context.Context, req *types.OntologyReasonRequest) (*types.OntologyReasonResponse, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/reason", bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/reason", bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
@@ -1238,7 +1245,7 @@ func (c *OntologyClient) Reason(ctx context.Context, req *OntologyReasonRequest)
 		return nil, fmt.Errorf("sidecar returned status %d: %s", resp.StatusCode, string(respBody))
 	}
 
-	var result OntologyReasonResponse
+	var result types.OntologyReasonResponse
 	if err := json.Unmarshal(respBody, &result); err != nil {
 		return nil, fmt.Errorf("failed to parse response: %w", err)
 	}
@@ -1247,15 +1254,15 @@ func (c *OntologyClient) Reason(ctx context.Context, req *OntologyReasonRequest)
 }
 ```
 
-- [ ] **Step 2: Verify compilation**
+- [ ] **Step 3: Verify compilation**
 
-Run: `go build ./internal/application/service/...`
-Expected: Clean build.
+Run: `go test ./internal/application/service/ontology_client.go`
+Expected: PASS with `[no test files]`.
 
-- [ ] **Step 3: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
-git add internal/application/service/ontology_client.go
+git add internal/types/ontology_reason.go internal/application/service/ontology_client.go
 git commit -m "feat(ontology): add HTTP client for .NET reasoning sidecar"
 ```
 
@@ -1264,9 +1271,21 @@ git commit -m "feat(ontology): add HTTP client for .NET reasoning sidecar"
 ### Task 9: ontology_reason Agent Tool
 
 **Files:**
+
 - Create: `internal/agent/tools/ontology_reason.go`
 - Modify: `internal/agent/tools/definitions.go`
 - Modify: `internal/application/service/agent_service.go`
+- Modify: `internal/sandbox/local.go`
+- Create: `internal/sandbox/process_unix.go`
+- Create: `internal/sandbox/process_windows.go`
+- Modify: `internal/agent/tools/data_analysis_duckdb_test.go`
+- Modify: `frontend/src/views/agent/AgentEditorModal.vue`
+- Modify: `frontend/src/utils/tool-capabilities.ts`
+- Modify: `frontend/src/utils/tool-icons.ts`
+- Modify: `frontend/src/i18n/locales/zh-CN.ts`
+- Modify: `frontend/src/i18n/locales/en-US.ts`
+- Modify: `frontend/src/i18n/locales/ko-KR.ts`
+- Modify: `frontend/src/i18n/locales/ru-RU.ts`
 
 - [ ] **Step 1: Add ToolOntologyReason constant to definitions.go**
 
@@ -1284,6 +1303,8 @@ Add to `AvailableToolDefinitions()` return list:
 
 - [ ] **Step 2: Create the ontology_reason tool file**
 
+Do not import `internal/application/service` from the tools package; `agent_service.go` already imports tools, so the tool must accept the sidecar client through a local interface using shared DTOs from `internal/types`.
+
 ```go
 // internal/agent/tools/ontology_reason.go
 package tools
@@ -1294,7 +1315,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/Tencent/WeKnora/internal/application/service"
 	"github.com/Tencent/WeKnora/internal/types"
 	"github.com/Tencent/WeKnora/internal/types/interfaces"
 	"github.com/Tencent/WeKnora/internal/utils"
@@ -1308,17 +1328,9 @@ var ontologyReasonTool = BaseTool{
 Executes structural reasoning — transitive closure, type hierarchy, constraint validation — on chunk-scoped ontology data stored in the knowledge base.
 
 ## When to Use
-✅ **Use for**:
-- Transitive queries ("all indirect dependencies of X", "ancestors of Y")
-- Type hierarchy ("is X a kind of Y?", "what types does X belong to?")
-- Constraint validation ("does X satisfy the schema?", "any constraint violations?")
-- Mutual exclusion ("can X be both A and B?")
-- SPARQL queries over inferred knowledge
+Use for transitive queries, type hierarchy checks, schema constraint validation, mutual exclusion checks, and SPARQL queries over inferred knowledge.
 
-❌ **Don't use for**:
-- Fuzzy text search → use knowledge_search
-- Entity relationship browsing → use query_knowledge_graph
-- General Q&A → use knowledge_search
+Do not use for fuzzy text search, entity relationship browsing, or general Q&A; use knowledge_search or query_knowledge_graph instead.
 
 ## Parameters
 - **knowledge_base_ids** (required): Array of knowledge base IDs (1-10)
@@ -1335,15 +1347,19 @@ type OntologyReasonInput struct {
 	IncludeEvidence  bool     `json:"include_evidence,omitempty" jsonschema:"Include evidence chunk references"`
 }
 
+type OntologyReasonClient interface {
+	Reason(ctx context.Context, req *types.OntologyReasonRequest) (*types.OntologyReasonResponse, error)
+}
+
 type OntologyReasonTool struct {
 	BaseTool
 	knowledgeService interfaces.KnowledgeBaseService
-	ontologyClient   *service.OntologyClient
+	ontologyClient   OntologyReasonClient
 }
 
 func NewOntologyReasonTool(
 	knowledgeService interfaces.KnowledgeBaseService,
-	ontologyClient *service.OntologyClient,
+	ontologyClient OntologyReasonClient,
 ) *OntologyReasonTool {
 	return &OntologyReasonTool{
 		BaseTool:         ontologyReasonTool,
@@ -1419,13 +1435,19 @@ func (t *OntologyReasonTool) Execute(ctx context.Context, args json.RawMessage) 
 		allChunkIDs = allChunkIDs[:50]
 	}
 
-	tenantID := types.TenantIDFromContext(ctx)
+	tenantID, ok := types.TenantIDFromContext(ctx)
+	if !ok {
+		return &types.ToolResult{
+			Success: false,
+			Error:   "tenant ID is missing from context",
+		}, fmt.Errorf("tenant ID is missing from context")
+	}
 
-	req := &service.OntologyReasonRequest{
-		TenantID:         int64(tenantID),
+	req := &types.OntologyReasonRequest{
+		TenantID:         tenantID,
 		KnowledgeBaseIDs: input.KnowledgeBaseIDs,
 		ChunkIDs:         allChunkIDs,
-		Query: service.OntologyQuery{
+		Query: types.OntologyQuery{
 			Type:    "entailment",
 			Body:    input.Query,
 			Profile: profile,
@@ -1456,7 +1478,7 @@ func (t *OntologyReasonTool) Execute(ctx context.Context, args json.RawMessage) 
 	}, nil
 }
 
-func formatOntologyResult(resp *service.OntologyReasonResponse, includeEvidence bool) string {
+func formatOntologyResult(resp *types.OntologyReasonResponse, includeEvidence bool) string {
 	var sb strings.Builder
 	sb.WriteString("=== Ontology Reasoning Results ===\n\n")
 	sb.WriteString(fmt.Sprintf("Status: %s\n", resp.Status))
@@ -1477,7 +1499,7 @@ func formatOntologyResult(resp *service.OntologyReasonResponse, includeEvidence 
 	if len(resp.InferredTriples) > 0 {
 		sb.WriteString(fmt.Sprintf("=== Inferred Triples (%d) ===\n", len(resp.InferredTriples)))
 		for _, t := range resp.InferredTriples {
-			sb.WriteString(fmt.Sprintf("  %s -[%s]-> %s\n", t.S, t.P, t.O))
+			sb.WriteString(fmt.Sprintf("  %s -[%s]-> %s\n", t.Subject, t.Predicate, t.Object))
 		}
 		sb.WriteString("\n")
 	}
@@ -1493,7 +1515,7 @@ func formatOntologyResult(resp *service.OntologyReasonResponse, includeEvidence 
 	if len(resp.Warnings) > 0 {
 		sb.WriteString("=== Warnings ===\n")
 		for _, w := range resp.Warnings {
-			sb.WriteString(fmt.Sprintf("  ⚠ %s\n", w))
+			sb.WriteString(fmt.Sprintf("  %s\n", w))
 		}
 	}
 
@@ -1514,10 +1536,10 @@ In `internal/application/service/agent_service.go`, in the `registerTools` metho
 			}
 ```
 
-Also add `ToolOntologyReason` to the `ragToolSet` map (around line 448):
+Also add `ToolOntologyReason` to both the no-knowledge `kbTools` filter map and the `ragToolSet` map:
 
 ```go
-		tools.ToolOntologyReason:     true,
+		tools.ToolOntologyReason: true,
 ```
 
 - [ ] **Step 4: Add to DefaultAllowedTools**
@@ -1528,19 +1550,173 @@ In `definitions.go`, add `ToolOntologyReason` to the `DefaultAllowedTools()` ret
 		ToolOntologyReason,
 ```
 
-- [ ] **Step 5: Verify compilation**
+- [ ] **Step 5: Sync frontend tool metadata**
 
-Run: `go build ./internal/agent/tools/... && go build ./internal/application/service/...`
+Keep the backend RAG tool allowlist in sync with the Agent editor and shared frontend tool metadata.
+
+In `frontend/src/views/agent/AgentEditorModal.vue`, add `ontology_reason` to `knowledgeBaseTools` after `query_knowledge_graph`:
+
+```ts
+const knowledgeBaseTools = ['grep_chunks', 'knowledge_search', 'list_knowledge_chunks', 'query_knowledge_graph', 'ontology_reason', 'get_document_info', 'database_query'];
+```
+
+In the RAG group inside `allTools`, add:
+
+```ts
+{ value: 'ontology_reason', label: t('agentEditor.tools.ontologyReason'), description: t('agentEditor.tools.ontologyReasonDesc'), group: 'rag' },
+```
+
+In the smart-reasoning default tool list, add:
+
+```ts
+'ontology_reason',
+```
+
+In `frontend/src/utils/tool-capabilities.ts`, add:
+
+```ts
+ontology_reason:       { anyOf: ['vector', 'keyword'], consumesFiles: true },
+```
+
+In `frontend/src/utils/tool-icons.ts`, add:
+
+```ts
+ontology_reason: '🧠',
+```
+
+and add the display-name key:
+
+```ts
+ontology_reason: 'tools.ontologyReason',
+```
+
+In `frontend/src/i18n/locales/zh-CN.ts`, add the top-level `tools` key and the `agentEditor.tools` labels:
+
+```ts
+ontologyReason: "本体推理",
+ontologyReasonDesc: "基于知识图谱进行形式化推理",
+```
+
+In `frontend/src/i18n/locales/en-US.ts`, add the top-level `tools` key and the `agentEditor.tools` labels:
+
+```ts
+ontologyReason: 'Ontology Reasoning',
+ontologyReasonDesc: 'Run formal reasoning over knowledge graph ontology slices',
+```
+
+In `frontend/src/i18n/locales/ko-KR.ts`, add the top-level `tools` key and the `agentEditor.tools` labels:
+
+```ts
+ontologyReason: '온톨로지 추론',
+ontologyReasonDesc: '지식 그래프 온톨로지 슬라이스에 대해 형식 추론 실행',
+```
+
+In `frontend/src/i18n/locales/ru-RU.ts`, add the top-level `tools` key and the `agentEditor.tools` labels:
+
+```ts
+ontologyReason: 'Онтологический вывод',
+ontologyReasonDesc: 'Запуск формального вывода по онтологическим срезам графа знаний',
+```
+
+- [ ] **Step 6: Fix Windows CGO verification blockers**
+
+`pg_query_go`, `gojieba`, and DuckDB require CGO on Windows. Configure the local toolchain with MSYS2 UCRT64 GCC before running package checks:
+
+```bash
+winget install --id MSYS2.MSYS2 --accept-package-agreements --accept-source-agreements --silent
+/c/msys64/usr/bin/pacman.exe -Syu --noconfirm
+/c/msys64/usr/bin/pacman.exe -S --needed --noconfirm mingw-w64-ucrt-x86_64-gcc
+go env -w CGO_ENABLED=1 CC=C:/msys64/ucrt64/bin/gcc.exe CXX=C:/msys64/ucrt64/bin/g++.exe
+```
+
+Move Unix-only process-group cleanup out of `internal/sandbox/local.go` so the package builds on Windows:
+
+```go
+// internal/sandbox/process_unix.go
+//go:build !windows
+
+package sandbox
+
+import (
+    "os/exec"
+    "syscall"
+)
+
+func setupProcessGroup(cmd *exec.Cmd) {
+    cmd.SysProcAttr = &syscall.SysProcAttr{
+        Setpgid: true,
+    }
+}
+
+func killProcessGroup(cmd *exec.Cmd) {
+    if cmd.Process != nil {
+        _ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+    }
+}
+```
+
+```go
+// internal/sandbox/process_windows.go
+//go:build windows
+
+package sandbox
+
+import "os/exec"
+
+func setupProcessGroup(cmd *exec.Cmd) {}
+
+func killProcessGroup(cmd *exec.Cmd) {
+    if cmd.Process != nil {
+        _ = cmd.Process.Kill()
+    }
+}
+```
+
+In `internal/sandbox/local.go`, replace the direct `syscall.SysProcAttr{Setpgid: true}` assignment with:
+
+```go
+setupProcessGroup(cmd)
+```
+
+and replace direct process-group killing with:
+
+```go
+killProcessGroup(cmd)
+```
+
+DuckDB Excel integration tests link DuckDB static libraries and should not run as part of normal package compile checks. Add an explicit build tag to `internal/agent/tools/data_analysis_duckdb_test.go`:
+
+```go
+//go:build duckdb && cgo
+```
+
+- [ ] **Step 7: Verify compilation**
+
+Run: `PATH="/c/msys64/ucrt64/bin:$PATH" go test ./internal/types -run '^$' -vet=off && PATH="/c/msys64/ucrt64/bin:$PATH" go test ./internal/agent/tools -run '^$' -vet=off && PATH="/c/msys64/ucrt64/bin:$PATH" go test ./internal/application/service -run '^$' -vet=off`
 Expected: Clean build.
 
-Note: You may need to check the exact import path for `types.TenantIDFromContext` — search for how other tools extract the tenant ID from context. If this function doesn't exist, use the pattern found in other tools to get the tenant ID.
+Run: `npm --prefix frontend run type-check`
+Expected: Existing frontend type errors may still block this repository-wide check; ontology_reason locale/tool metadata should not introduce new missing-key errors.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
 git add internal/agent/tools/ontology_reason.go \
        internal/agent/tools/definitions.go \
-       internal/application/service/agent_service.go
+       internal/application/service/agent_service.go \
+       internal/types/ontology_reason.go \
+       internal/application/service/ontology_client.go \
+       internal/sandbox/local.go \
+       internal/sandbox/process_unix.go \
+       internal/sandbox/process_windows.go \
+       internal/agent/tools/data_analysis_duckdb_test.go \
+       frontend/src/views/agent/AgentEditorModal.vue \
+       frontend/src/utils/tool-capabilities.ts \
+       frontend/src/utils/tool-icons.ts \
+       frontend/src/i18n/locales/zh-CN.ts \
+       frontend/src/i18n/locales/en-US.ts \
+       frontend/src/i18n/locales/ko-KR.ts \
+       frontend/src/i18n/locales/ru-RU.ts
 git commit -m "feat(ontology): add ontology_reason agent tool with sidecar integration"
 ```
 
@@ -1549,7 +1725,9 @@ git commit -m "feat(ontology): add ontology_reason agent tool with sidecar integ
 ### Task 10: .NET Solution Scaffold
 
 **Files:**
-- Create: `ontology-reasoner-net/WeKnora.OntologyReasoner.sln`
+
+- Create: `ontology-reasoner-net/WeKnora.OntologyReasoner.slnx`
+- Create: `ontology-reasoner-net/WeKnora.OntologyReasoner.Api/Program.cs`
 - Create: `ontology-reasoner-net/WeKnora.OntologyReasoner.Api/WeKnora.OntologyReasoner.Api.csproj`
 - Create: `ontology-reasoner-net/WeKnora.OntologyReasoner.Core/WeKnora.OntologyReasoner.Core.csproj`
 - Create: `ontology-reasoner-net/WeKnora.OntologyReasoner.Tests/WeKnora.OntologyReasoner.Tests.csproj`
@@ -1627,26 +1805,38 @@ mkdir -p ontology-reasoner-net/WeKnora.OntologyReasoner.Tests/Aligner
 </Project>
 ```
 
-- [ ] **Step 5: Create solution file**
+- [ ] **Step 5: Create minimal API entrypoint**
+
+```csharp
+// ontology-reasoner-net/WeKnora.OntologyReasoner.Api/Program.cs
+var builder = WebApplication.CreateBuilder(args);
+var app = builder.Build();
+
+app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
+
+app.Run();
+```
+
+- [ ] **Step 6: Create solution file**
 
 ```bash
 cd ontology-reasoner-net
-dotnet new sln --name WeKnora.OntologyReasoner
-dotnet sln add WeKnora.OntologyReasoner.Api/WeKnora.OntologyReasoner.Api.csproj
-dotnet sln add WeKnora.OntologyReasoner.Core/WeKnora.OntologyReasoner.Core.csproj
-dotnet sln add WeKnora.OntologyReasoner.Tests/WeKnora.OntologyReasoner.Tests.csproj
+dotnet new sln --name WeKnora.OntologyReasoner --format slnx
+dotnet sln WeKnora.OntologyReasoner.slnx add WeKnora.OntologyReasoner.Api/WeKnora.OntologyReasoner.Api.csproj
+dotnet sln WeKnora.OntologyReasoner.slnx add WeKnora.OntologyReasoner.Core/WeKnora.OntologyReasoner.Core.csproj
+dotnet sln WeKnora.OntologyReasoner.slnx add WeKnora.OntologyReasoner.Tests/WeKnora.OntologyReasoner.Tests.csproj
 cd ..
 ```
 
-- [ ] **Step 6: Verify solution builds**
+- [ ] **Step 7: Verify solution builds**
 
 ```bash
-cd ontology-reasoner-net && dotnet build && cd ..
+dotnet build ontology-reasoner-net/WeKnora.OntologyReasoner.slnx
 ```
 
 Expected: Build succeeded.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
 git add ontology-reasoner-net/

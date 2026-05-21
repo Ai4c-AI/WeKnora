@@ -16,6 +16,7 @@ export const toolIcons: Record<string, string> = {
     list_knowledge_chunks: '🧩',
     get_document_info: 'ℹ️',
     query_knowledge_graph: '🕸️',
+    ontology_reason: '🧠',
     think: '💭',
     todo_write: '📋',
 };
@@ -62,6 +63,7 @@ const toolDisplayNameKeys: Record<string, string> = {
     list_knowledge_bases: 'tools.listKnowledgeBases',
     get_document_info: 'tools.getDocumentInfo',
     query_knowledge_graph: 'tools.queryKnowledgeGraph',
+    ontology_reason: 'tools.ontologyReason',
     think: 'tools.think',
     todo_write: 'tools.todoWrite',
 };

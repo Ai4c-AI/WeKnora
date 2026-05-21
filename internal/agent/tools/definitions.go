@@ -19,6 +19,7 @@ const (
 	ToolWebSearch           = "web_search"
 	ToolWebFetch            = "web_fetch"
 	ToolFinalAnswer         = "final_answer"
+	ToolOntologyReason      = "ontology_reason"
 	// Skills-related tools (only available when skills are enabled)
 	ToolExecuteSkillScript = "execute_skill_script"
 	ToolReadSkill          = "read_skill"
@@ -52,6 +53,7 @@ func AvailableToolDefinitions() []AvailableTool {
 		{Name: ToolKnowledgeSearch, Label: "语义搜索", Description: "理解问题并查找语义相关内容"},
 		{Name: ToolListKnowledgeChunks, Label: "查看文档分块", Description: "获取文档完整分块内容"},
 		{Name: ToolQueryKnowledgeGraph, Label: "查询知识图谱", Description: "从知识图谱中查询关系"},
+		{Name: ToolOntologyReason, Label: "本体推理", Description: "基于知识图谱进行形式化推理（传递关系、类型层级、约束验证）"},
 		{Name: ToolGetDocumentInfo, Label: "获取文档信息", Description: "查看文档元数据"},
 		{Name: ToolDatabaseQuery, Label: "查询数据库", Description: "查询数据库中的信息"},
 		{Name: ToolDataAnalysis, Label: "数据分析", Description: "理解数据文件并进行数据分析"},
@@ -81,6 +83,7 @@ func DefaultAllowedTools() []string {
 		ToolGrepChunks,
 		ToolListKnowledgeChunks,
 		ToolQueryKnowledgeGraph,
+		ToolOntologyReason,
 		ToolGetDocumentInfo,
 		ToolDatabaseQuery,
 		ToolDataAnalysis,

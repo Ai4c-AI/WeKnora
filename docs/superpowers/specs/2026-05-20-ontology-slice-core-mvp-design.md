@@ -143,18 +143,26 @@ func (b *graphBuilder) buildInstanceFacts(
 
 ### 2.5 Canonical Map 自动填充
 
-micro-TBox 抽取完成后，将别名自动写入 `ontology_canonical_map`：
+micro-TBox 抽取完成后，将别名自动写入 `ontology_canonical_map`。实现必须贴合现有 Go 分层：模型放在 `internal/types/canonical_map.go`，接口放在 `internal/types/interfaces/canonical_map.go`，GORM 实现放在 `internal/application/repository/canonical_map.go`，并在 `internal/container/container.go` 注册；不要新增独立的 `internal/repo` 包。`tenantID` 使用项目现有的 `uint64`，由 `BuildGraph` 的 chunk 输入推导。
 
 ```go
 func (b *graphBuilder) upsertCanonicalMap(
     ctx context.Context,
-    tenantID int64,
+    tenantID uint64,
     kbID string,
     tbox *types.MicroTBox,
     chunkID string,
 ) error {
     for canonicalID, aliases := range tbox.Aliases {
-        err := b.canonicalMapRepo.Upsert(ctx, tenantID, kbID, canonicalID, aliases, chunkID)
+        err := b.canonicalMapRepo.Upsert(
+            ctx,
+            tenantID,
+            kbID,
+            types.CanonicalMapKindClass,
+            canonicalID,
+            aliases,
+            chunkID,
+        )
         if err != nil {
             return err
         }
