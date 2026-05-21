@@ -263,8 +263,9 @@ templates:
          organization, ...") — in which case use the broader term as id.
       2. Every `id` in `properties` MUST correspond to a relationship `description` or a
          normalized form of it from the input relationship list.
-      3. Every extracted item MUST include an `evidence` field — a verbatim substring quoted
-         from the source text. If you cannot quote the supporting text, OMIT the item.
+      3. Every extracted class/property/shape/axiom item MUST include an `evidence` field — a verbatim substring quoted
+         from the source text. Alias mappings still require explicit equivalence/acronym/same-entity support, but no evidence field.
+         If you cannot quote the supporting text, OMIT the item.
       4. Use {{language}} for `label`, `statement`, and other free-text fields. Keep `id` fields in ASCII (camelCase or
          PascalCase). Keep `evidence` exactly as it appears in the source text.
       5. PREFER EMPTY OVER WRONG. Returning `{"classes": [], "properties": [], ...}` is the
@@ -330,7 +331,7 @@ templates:
       ### axioms
       Free-form logical statements that classes/properties/shapes cannot express.
       Use sparingly. Each element:
-        - statement: a clear English description of the logical rule
+        - statement: a clear {{language}} description of the logical rule
         - evidence:  verbatim quote
       Examples of when to use axioms:
         - Complex constraints involving multiple classes/properties
@@ -391,9 +392,9 @@ templates:
           {"id": "CapuletFamily", "label": "Capulet", "subClassOf": "Family", "disjointWith": ["MontagueFamily"], "evidence": "A member of one family cannot also be a member of the other"}
         ],
         "properties": [
-          {"id": "wrote", "label": "wrote", "domain": "Person", "range": "Work", "characteristics": [], "inverseOf": "writtenBy", "evidence": "is a tragedy written by William Shakespeare"},
-          {"id": "sonOf", "label": "son of", "domain": "Person", "range": "Person", "characteristics": ["functional", "asymmetric", "irreflexive"], "inverseOf": null, "evidence": "Romeo Montague, son of Lord Montague"},
-          {"id": "descendantOf", "label": "descendant of", "domain": "Person", "range": "Organization", "characteristics": ["transitive", "asymmetric"], "inverseOf": null, "evidence": "anyone who is a descendant of a Montague is themselves a Montague"}
+          {"id": "wrote", "label": "wrote", "domain": "Person", "range": "Work", "characteristics": [], "inverseOf": null, "evidence": "is a tragedy written by William Shakespeare"},
+          {"id": "sonOf", "label": "son of", "domain": "Person", "range": "Person", "characteristics": [], "inverseOf": null, "evidence": "Romeo Montague, son of Lord Montague"},
+          {"id": "descendantOf", "label": "descendant of", "domain": "Person", "range": "MontagueFamily", "characteristics": ["transitive", "asymmetric"], "inverseOf": null, "evidence": "anyone who is a descendant of a Montague is themselves a Montague"}
         ],
         "shapes": [
           {"target_class": "Person", "constraints": [{"property": "isMemberOf", "min_count": null, "max_count": 1, "datatype": null, "in_values": null}], "evidence": "A member of one family cannot also be a member of the other"}

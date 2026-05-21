@@ -842,8 +842,8 @@ func applyAuditDefaults(cfg *Config) {
 func applyOntologyDefaults(cfg *Config) {
 	applyOntologyDefaultsWithExplicitness(
 		cfg,
-		viper.IsSet("ontology.confidence_threshold"),
-		viper.IsSet("ontology.extract_min_entities"),
+		viper.InConfig("ontology.confidence_threshold"),
+		viper.InConfig("ontology.extract_min_entities"),
 	)
 }
 

@@ -3,6 +3,8 @@ package config
 import (
 	"strings"
 	"testing"
+
+	"github.com/spf13/viper"
 )
 
 func TestApplyOntologyDefaults(t *testing.T) {
@@ -63,6 +65,32 @@ func TestApplyOntologyDefaultsAppliesNumericDefaultsWhenUnset(t *testing.T) {
 	}
 	if cfg.Ontology.ExtractMinEntities != 2 {
 		t.Fatalf("ExtractMinEntities = %d, want 2", cfg.Ontology.ExtractMinEntities)
+	}
+}
+
+func TestApplyOntologyDefaultsInvalidEnvWithOmittedNumericConfigKeepsDefaults(t *testing.T) {
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	viper.AutomaticEnv()
+	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
+
+	t.Setenv("ONTOLOGY_CONFIDENCE_THRESHOLD", "not-float")
+	t.Setenv("ONTOLOGY_EXTRACT_MIN_ENTITIES", "not-int")
+
+	cfg := &Config{
+		Ontology: &OntologyConfig{
+			ConfidenceThreshold: 0,
+			ExtractMinEntities:  0,
+		},
+	}
+
+	applyOntologyDefaults(cfg)
+
+	if cfg.Ontology.ConfidenceThreshold != 0.3 {
+		t.Fatalf("ConfidenceThreshold = %v, want default 0.3 when invalid env is ignored", cfg.Ontology.ConfidenceThreshold)
+	}
+	if cfg.Ontology.ExtractMinEntities != 2 {
+		t.Fatalf("ExtractMinEntities = %d, want default 2 when invalid env is ignored", cfg.Ontology.ExtractMinEntities)
 	}
 }
 
