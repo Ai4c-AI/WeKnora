@@ -16,6 +16,7 @@ import (
 
 	filesvc "github.com/Tencent/WeKnora/internal/application/service/file"
 	"github.com/Tencent/WeKnora/internal/config"
+	apperrors "github.com/Tencent/WeKnora/internal/errors"
 	"github.com/Tencent/WeKnora/internal/event"
 	"github.com/Tencent/WeKnora/internal/logger"
 	"github.com/Tencent/WeKnora/internal/models/chat"
@@ -80,15 +81,32 @@ var storageSchemeRe = regexp.MustCompile(`\b(local|minio|s3|cos|tos|oss)://[^\s)
 // rewriteStorageURLs replaces all provider:// URLs in content with HTTP URLs
 // obtained from fileService.GetFileURL. URLs that are already HTTP or cannot
 // be resolved are left unchanged.
+//
+// Logging policy:
+//   - Successful rewrite logs at INFO with the full signed URL so operators
+//     can copy it out of logs and verify public reachability directly. The
+//     trade-off: anyone with log access can use a signed URL until it
+//     expires (WeKnora 2h, MinIO 24h). Acceptable for diagnosability.
+//   - Failure or no-op rewrite logs at WARN. The no-op case typically means
+//     APP_EXTERNAL_URL is not configured for the local backend, which is
+//     the most common cause of "image broken in IM" reports.
 func rewriteStorageURLs(ctx context.Context, content string, fileSvc interfaces.FileService) string {
 	if fileSvc == nil {
 		return content
 	}
 	return storageSchemeRe.ReplaceAllStringFunc(content, func(match string) string {
 		httpURL, err := fileSvc.GetFileURL(ctx, match)
-		if err != nil || httpURL == match {
+		if err != nil {
+			logger.Warnf(ctx, "[IM] rewriteStorageURLs failed: src=%s err=%v", match, err)
 			return match
 		}
+		if httpURL == match {
+			logger.Warnf(ctx,
+				"[IM] rewriteStorageURLs no-op (URL unchanged; for local storage set APP_EXTERNAL_URL): src=%s",
+				match)
+			return match
+		}
+		logger.Infof(ctx, "[IM] rewriteStorageURLs: src=%s dst=%s", match, httpURL)
 		return httpURL
 	})
 }
@@ -1048,8 +1066,8 @@ func (s *Service) HandleMessage(ctx context.Context, msg *IncomingMessage, chann
 		// ChannelSession mapping still exists (GORM soft-delete does not trigger
 		// SQL ON DELETE CASCADE). Recover by soft-deleting the stale mapping and
 		// re-creating a fresh session so the IM bot doesn't become permanently
-		// unresponsive. (fixes #1046)
-		if errors.Is(err, gorm.ErrRecordNotFound) {
+		// unresponsive. (fixes #1046, #1499)
+		if isSessionNotFound(err) {
 			logger.Warnf(ctx, "[IM] Session %s not found (deleted?), recycling stale channel session %s",
 				channelSession.SessionID, channelSession.ID)
 			if delErr := s.db.Delete(&ChannelSession{}, "id = ?", channelSession.ID).Error; delErr != nil {
@@ -1322,6 +1340,15 @@ func (s *Service) sendStreamReply(ctx context.Context, msg *IncomingMessage, str
 		return fmt.Errorf("end stream: %w", err)
 	}
 	return nil
+}
+
+// isSessionNotFound reports whether err indicates the underlying WeKnora
+// session no longer exists. The session repository translates GORM's
+// ErrRecordNotFound into apperrors.ErrSessionNotFound, so the application
+// sentinel is what GetSession returns today; the GORM check is kept as a
+// safety net in case a future repository revert bypasses the translation.
+func isSessionNotFound(err error) bool {
+	return errors.Is(err, apperrors.ErrSessionNotFound) || errors.Is(err, gorm.ErrRecordNotFound)
 }
 
 // resolveSession dispatches to the appropriate session resolution strategy

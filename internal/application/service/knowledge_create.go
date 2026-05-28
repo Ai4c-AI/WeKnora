@@ -56,7 +56,7 @@ func (s *knowledgeService) CreateKnowledgeFromFile(ctx context.Context,
 		return nil, werrors.NewBadRequestError("FAQ 知识库不支持文件上传，请使用 FAQ 导入功能")
 	}
 
-	if err := checkStorageEngineConfigured(ctx, kb); err != nil {
+	if err := s.checkStorageEngineConfigured(ctx, kb); err != nil {
 		return nil, err
 	}
 
@@ -262,7 +262,11 @@ func (s *knowledgeService) CreateKnowledgeFromFile(ctx context.Context,
 		return knowledge, nil
 	}
 
-	task := asynq.NewTask(types.TypeDocumentProcess, payloadBytes, asynq.Queue("default"), asynq.MaxRetry(3))
+	task := asynq.NewTask(
+		types.TypeDocumentProcess,
+		payloadBytes,
+		documentProcessTaskOptions(s.config, asynq.MaxRetry(3))...,
+	)
 	info, err := s.task.Enqueue(task)
 	if err != nil {
 		logger.Errorf(ctx, "Failed to enqueue document process task: %v", err)
@@ -322,7 +326,7 @@ func (s *knowledgeService) CreateKnowledgeFromURL(ctx context.Context,
 		return nil, err
 	}
 
-	if err := checkStorageEngineConfigured(ctx, kb); err != nil {
+	if err := s.checkStorageEngineConfigured(ctx, kb); err != nil {
 		return nil, err
 	}
 
@@ -436,7 +440,11 @@ func (s *knowledgeService) CreateKnowledgeFromURL(ctx context.Context,
 		return knowledge, nil
 	}
 
-	task := asynq.NewTask(types.TypeDocumentProcess, payloadBytes, asynq.Queue("default"), asynq.MaxRetry(3))
+	task := asynq.NewTask(
+		types.TypeDocumentProcess,
+		payloadBytes,
+		documentProcessTaskOptions(s.config, asynq.MaxRetry(3))...,
+	)
 	info, err := s.task.Enqueue(task)
 	if err != nil {
 		logger.Errorf(ctx, "Failed to enqueue URL process task: %v", err)
@@ -518,7 +526,7 @@ func (s *knowledgeService) createKnowledgeFromFileURL(
 		return nil, err
 	}
 
-	if err := checkStorageEngineConfigured(ctx, kb); err != nil {
+	if err := s.checkStorageEngineConfigured(ctx, kb); err != nil {
 		return nil, err
 	}
 
@@ -659,7 +667,11 @@ func (s *knowledgeService) createKnowledgeFromFileURL(
 		return knowledge, nil
 	}
 
-	task := asynq.NewTask(types.TypeDocumentProcess, payloadBytes, asynq.Queue("default"))
+	task := asynq.NewTask(
+		types.TypeDocumentProcess,
+		payloadBytes,
+		documentProcessTaskOptions(s.config)...,
+	)
 	info, err := s.task.Enqueue(task)
 	if err != nil {
 		logger.Errorf(ctx, "Failed to enqueue file URL process task: %v", err)
@@ -722,7 +734,7 @@ func (s *knowledgeService) CreateKnowledgeFromManual(ctx context.Context,
 		return nil, err
 	}
 
-	if err := checkStorageEngineConfigured(ctx, kb); err != nil {
+	if err := s.checkStorageEngineConfigured(ctx, kb); err != nil {
 		return nil, err
 	}
 
@@ -879,7 +891,11 @@ func (s *knowledgeService) createKnowledgeFromPassageInternal(ctx context.Contex
 			return knowledge, nil
 		}
 
-		task := asynq.NewTask(types.TypeDocumentProcess, payloadBytes, asynq.Queue("default"), asynq.MaxRetry(3))
+		task := asynq.NewTask(
+			types.TypeDocumentProcess,
+			payloadBytes,
+			documentProcessTaskOptions(s.config, asynq.MaxRetry(3))...,
+		)
 		info, err := s.task.Enqueue(task)
 		if err != nil {
 			logger.Errorf(ctx, "Failed to enqueue passage process task: %v", err)

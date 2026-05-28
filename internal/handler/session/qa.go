@@ -123,6 +123,23 @@ func (h *Handler) parseQARequest(c *gin.Context, logPrefix string) (*qaRequestCo
 	// Merge @mentioned items into knowledge_base_ids and knowledge_ids
 	kbIDs, knowledgeIDs := mergeKnowledgeTargets(request.KnowledgeBaseIDs, request.KnowledgeIds, request.MentionedItems)
 
+	// The built-in wiki fixer is invoked from a KB page, not from a tenant's
+	// regular agent picker. When the KB is shared, run it in the source tenant
+	// only if the caller has edit permission, so KB-scoped models/tools resolve
+	// without granting viewers write capability.
+	if customAgent != nil && customAgent.ID == types.BuiltinWikiFixerID {
+		if scopedAgent, scopedTenantID := h.resolveWikiFixerTenantScope(
+			ctx,
+			customAgent,
+			c.GetUint64(types.TenantIDContextKey.String()),
+			types.TenantRoleFromContext(ctx),
+			kbIDs,
+		); scopedTenantID != 0 {
+			customAgent = scopedAgent
+			effectiveTenantID = scopedTenantID
+		}
+	}
+
 	// Log merge results for debugging
 	logger.Infof(ctx, "[%s] @mention merge: request.KnowledgeBaseIDs=%v, request.MentionedItems=%d, merged kbIDs=%v, merged knowledgeIDs=%v",
 		logPrefix, request.KnowledgeBaseIDs, len(request.MentionedItems), kbIDs, knowledgeIDs)
@@ -153,11 +170,14 @@ func (h *Handler) parseQARequest(c *gin.Context, logPrefix string) (*qaRequestCo
 	if len(request.AttachmentUploads) > 0 {
 		logger.Infof(ctx, "[%s] processing %d attachment(s)", logPrefix, len(request.AttachmentUploads))
 
-		maxSize := secutils.GetMaxFileSize()
+		// MAX_FILE_SIZE_MB env (50MB default). See utils/filesize.go for
+		// why this is deploy-time-only rather than a runtime setting.
+		maxSizeMB := secutils.GetMaxFileSizeMB()
+		maxSize := maxSizeMB * 1024 * 1024
 		for i, upload := range request.AttachmentUploads {
 			if upload.FileSize > maxSize {
 				return nil, nil, errors.NewBadRequestError(
-					fmt.Sprintf("attachment %d exceeds size limit of %dMB", i+1, secutils.GetMaxFileSizeMB()))
+					fmt.Sprintf("attachment %d exceeds size limit of %dMB", i+1, maxSizeMB))
 			}
 		}
 
@@ -227,7 +247,7 @@ func (h *Handler) parseQARequest(c *gin.Context, logPrefix string) (*qaRequestCo
 		sessionID:   sessionID,
 		requestID:   requestID,
 		receivedAt:  receivedAt,
-		query:       secutils.SanitizeForLog(request.Query),
+		query:       request.Query,
 		session:     session,
 		customAgent: customAgent,
 		assistantMessage: &types.Message{

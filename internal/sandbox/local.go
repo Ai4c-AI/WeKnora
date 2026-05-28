@@ -112,7 +112,9 @@ func (s *LocalSandbox) Execute(ctx context.Context, config *ExecuteConfig) (*Exe
 	if err != nil {
 		if execCtx.Err() == context.DeadlineExceeded {
 			// Kill the process group
-			killProcessGroup(cmd)
+			if cmd.Process != nil {
+				killProcessGroup(cmd)
+			}
 			result.Killed = true
 			result.Error = ErrTimeout.Error()
 			result.ExitCode = -1

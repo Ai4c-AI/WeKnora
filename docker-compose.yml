@@ -41,12 +41,28 @@ services:
       - ./config/config.yaml:/app/config/config.yaml
       # Optional: mount custom skills directory (allows adding skills without rebuilding image)
       - ./skills/preloaded:/app/skills/preloaded
+      # Optional: declarative built-in models. Copy config/builtin_models.yaml.example
+      # to config/builtin_models.yaml, edit it for your deployment, then
+      # uncomment the line below. See docs/BUILTIN_MODELS.md.
+      # - ./config/builtin_models.yaml:/app/config/builtin_models.yaml:ro
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 60s
+    # Source .env so deployment-specific variables (e.g. those referenced by
+    # config/builtin_models.yaml via ${ENV}, or any future feature) reach the
+    # app container without having to be enumerated under `environment:`.
+    #
+    # NOTE: the array form below is used instead of the map form
+    # (env_file: - path: .env, required: false) because the map syntax
+    # requires Docker Compose v2.24+ (Jan 2024) and would break parsing on
+    # older deploys. The trade-off is that Compose errors out if .env is
+    # absent — see scripts/start_all.sh for the pre-flight touch that keeps
+    # fresh clones working.
+    env_file:
+      - .env
     environment:
       - LOG_LEVEL=${LOG_LEVEL:-}
       - COS_SECRET_ID=${COS_SECRET_ID:-}
@@ -171,7 +187,7 @@ services:
       # Agent LLM call timeout
       - WEKNORA_AGENT_LLM_TIMEOUT=${WEKNORA_AGENT_LLM_TIMEOUT:-}
       - WEKNORA_AGENT_TOOL_APPROVAL_TIMEOUT=${WEKNORA_AGENT_TOOL_APPROVAL_TIMEOUT:-}
-      # Tenant / RBAC（详见 docs/rbac.md 与 .env.example 注释）
+      # Tenant / RBAC（详见 docs/RBAC说明.md 与 .env.example 注释）
       # - WEKNORA_TENANT_ENABLE_RBAC: 是否启用租户角色强制鉴权（true / false），默认 true
       # - WEKNORA_TENANT_MAX_OWNED_PER_USER: 单个非超管自助创建租户的上限
       #   >0 强制限额；=0 走 handler 默认；<0 关闭限额（不建议共享部署使用）
@@ -183,6 +199,7 @@ services:
       - ONTOLOGY_DEFAULT_PROFILE=${ONTOLOGY_DEFAULT_PROFILE:-n3-extended}
       - ONTOLOGY_CONFIDENCE_THRESHOLD=${ONTOLOGY_CONFIDENCE_THRESHOLD:-0.3}
       - ONTOLOGY_EXTRACT_MIN_ENTITIES=${ONTOLOGY_EXTRACT_MIN_ENTITIES:-2}
+      - WEKNORA_BOOTSTRAP_SYSTEM_ADMIN_EMAIL=${WEKNORA_BOOTSTRAP_SYSTEM_ADMIN_EMAIL:-}
     depends_on:
       redis:
         condition: service_started

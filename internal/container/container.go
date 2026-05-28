@@ -140,6 +140,7 @@ func BuildContainer(container *dig.Container) *dig.Container {
 	must(container.Provide(repository.NewAuditLogRepository))
 	must(container.Provide(repository.NewKnowledgeBaseRepository))
 	must(container.Provide(repository.NewKnowledgeRepository))
+	must(container.Provide(repository.NewKnowledgeSpanRepository))
 	must(container.Provide(repository.NewChunkRepository))
 	must(container.Provide(repository.NewCanonicalMapRepository))
 	must(container.Provide(repository.NewKnowledgeTagRepository))
@@ -148,6 +149,7 @@ func BuildContainer(container *dig.Container) *dig.Container {
 	must(container.Provide(repository.NewModelRepository))
 	must(container.Provide(repository.NewUserRepository))
 	must(container.Provide(repository.NewAuthTokenRepository))
+	must(container.Provide(repository.NewSystemSettingRepository))
 	must(container.Provide(neo4jRepo.NewNeo4jRepository))
 	must(container.Provide(memoryRepo.NewMemoryRepository))
 	must(container.Provide(repository.NewMCPServiceRepository))
@@ -182,6 +184,7 @@ func BuildContainer(container *dig.Container) *dig.Container {
 	must(container.Provide(service.NewKBShareService)) // KBShareService must be registered before KnowledgeService and KnowledgeTagService
 	must(container.Provide(service.NewAgentShareService))
 	must(container.Provide(service.NewKnowledgeService))
+	must(container.Provide(service.NewSpanTracker))
 	must(container.Provide(service.NewChunkService))
 	must(container.Provide(service.NewKnowledgeTagService))
 	must(container.Provide(embedding.NewBatchEmbedder))
@@ -189,6 +192,7 @@ func BuildContainer(container *dig.Container) *dig.Container {
 	must(container.Provide(service.NewDatasetService))
 	must(container.Provide(service.NewEvaluationService))
 	must(container.Provide(service.NewUserService))
+	must(container.Provide(service.NewSystemSettingService))
 	must(container.Provide(service.NewWeKnoraCloudService))
 
 	// Extract services - register individual extracters with names
@@ -252,10 +256,18 @@ func BuildContainer(container *dig.Container) *dig.Container {
 	if redisAvailable {
 		must(container.Provide(router.NewAsyncqClient, dig.As(new(interfaces.TaskEnqueuer))))
 		must(container.Provide(router.NewAsynqServer))
+		// Asynq inspector for cancel-by-knowledge-id (best-effort
+		// dequeue of pending/scheduled/retry tasks + active-task cancel).
+		must(container.Provide(router.NewAsynqInspector))
+		must(container.Provide(router.NewAsynqTaskInspector))
 	} else {
 		syncExec := router.NewSyncTaskExecutor()
 		must(container.Provide(func() interfaces.TaskEnqueuer { return syncExec }))
 		must(container.Provide(func() *router.SyncTaskExecutor { return syncExec }))
+		// Lite mode: no Redis means no asynq inspector. SyncTaskExecutor
+		// dispatches inline goroutines that the checkpoint-based abort
+		// already handles.
+		must(container.Provide(router.NewNoopTaskInspector))
 	}
 
 	// Chat pipeline components for processing chat requests
@@ -270,6 +282,9 @@ func BuildContainer(container *dig.Container) *dig.Container {
 	logger.Debugf(ctx, "[Container] Data source sync framework registered")
 	must(container.Invoke(startAuditLogRetention))
 	logger.Debugf(ctx, "[Container] Audit log retention runner registered")
+	must(container.Provide(service.NewHousekeepingService))
+	must(container.Invoke(startHousekeepingService))
+	logger.Debugf(ctx, "[Container] Knowledge housekeeping runner registered")
 	must(container.Provide(chatpipeline.NewEventManager))
 	must(container.Invoke(chatpipeline.NewPluginSearch))
 	must(container.Invoke(chatpipeline.NewPluginRerank))
@@ -537,6 +552,11 @@ func initDatabase(cfg *config.Config) (*gorm.DB, error) {
 		// The SQL migration marks KBs that have documents but no provider with "__pending_env__";
 		// we replace that with the actual STORAGE_TYPE from the environment.
 		resolveStorageProviderPending(db)
+
+		// Post-migration: declarative built-in models from config/builtin_models.yaml (optional).
+		if err := types.LoadBuiltinModelsConfig(context.Background(), db, config.ConfigDir()); err != nil {
+			logger.Warnf(context.Background(), "Load builtin models config failed: %v", err)
+		}
 	} else {
 		logger.Infof(context.Background(), "Auto-migration is disabled (AUTO_MIGRATE=false)")
 	}
@@ -617,49 +637,106 @@ func syncSequences(db *gorm.DB) {
 }
 
 // resetPendingTasks resets the state of any knowledge items or sync logs stuck in processing
-// due to an unexpected application restart when using in-memory queues (Lite mode).
+// due to an unexpected application restart.
+//
+// In Lite mode (no REDIS_ADDR) every queued task lived in process memory, so
+// any "processing" row at startup is definitively orphaned and must be marked
+// failed wholesale. In distributed mode (Asynq on Redis) the active queue
+// survives restart, but the *currently executing* task on the dead instance
+// is lost — Asynq won't reschedule it until at-least-once retry kicks in,
+// which can take minutes or never (e.g. if the deadline has passed). To bound
+// the worst case we mark only "long-stale" rows failed: anything that hasn't
+// been touched for 30 minutes is well past any reasonable in-flight window.
+// Newer rows are left alone so we don't race a peer instance that's mid-process.
 func resetPendingTasks(db *gorm.DB) {
-	if os.Getenv("REDIS_ADDR") != "" {
-		return // Distributed queue (Asynq) will handle its own retries
+	distributed := os.Getenv("REDIS_ADDR") != ""
+	ctx := context.Background()
+	spanRepo := repository.NewKnowledgeSpanRepository(db)
+
+	knowledgeQuery := db.Model(&types.Knowledge{}).
+		Where("parse_status IN ?", []string{
+			types.ParseStatusPending,
+			types.ParseStatusProcessing,
+			types.ParseStatusFinalizing,
+			types.ParseStatusDeleting,
+		})
+	summaryQuery := db.Model(&types.Knowledge{}).
+		Where("summary_status IN ?", []string{types.SummaryStatusPending, types.SummaryStatusProcessing})
+	syncQuery := db.Model(&types.SyncLog{}).
+		Where("status IN ?", []string{types.SyncLogStatusRunning, "pending"})
+
+	if distributed {
+		// 30-minute stale threshold — comfortably longer than any individual
+		// stage's expected duration (DocReader 30m, embedding seconds, etc.)
+		// while short enough that operators don't wait hours after a crash.
+		staleCutoff := time.Now().Add(-30 * time.Minute)
+		knowledgeQuery = knowledgeQuery.Where("updated_at < ?", staleCutoff)
+		summaryQuery = summaryQuery.Where("updated_at < ?", staleCutoff)
+		syncQuery = syncQuery.Where("start_time < ?", staleCutoff)
 	}
 
-	// 1. Reset knowledge parsing tasks
-	result := db.Model(&types.Knowledge{}).
-		Where("parse_status IN ?", []string{types.ParseStatusPending, types.ParseStatusProcessing, types.ParseStatusDeleting}).
-		Updates(map[string]interface{}{
-			"parse_status":  types.ParseStatusFailed,
-			"error_message": "Task interrupted due to application restart",
-		})
+	// Cancel orphaned trace spans for knowledge rows we are about to mark
+	// failed. resetPendingTasks does not touch asynq queues; this only
+	// prevents the UI from showing duplicate running postprocess.*
+	// subspans when a later retry also opens fresh spans.
+	var stuckKnowledge []types.Knowledge
+	if err := knowledgeQuery.Select("id").Find(&stuckKnowledge).Error; err != nil {
+		logger.Warnf(ctx, "resetPendingTasks: list stuck knowledge failed: %v", err)
+	} else {
+		for _, k := range stuckKnowledge {
+			attempt, err := spanRepo.LatestAttempt(ctx, k.ID)
+			if err != nil || attempt <= 0 {
+				continue
+			}
+			if n, err := spanRepo.CancelAllOpenSpans(ctx, k.ID, attempt,
+				"SERVER_RESTART", "task interrupted due to application restart"); err != nil {
+				logger.Warnf(ctx, "resetPendingTasks: cancel spans for %s failed: %v", k.ID, err)
+			} else if n > 0 {
+				logger.Infof(ctx, "resetPendingTasks: cancelled %d open span(s) for knowledge %s attempt %d",
+					n, k.ID, attempt)
+			}
+		}
+	}
+
+	// 1. Reset knowledge parsing tasks (including finalizing rows whose
+	// enrichment subtasks were lost with the process).
+	result := knowledgeQuery.Updates(map[string]interface{}{
+		"parse_status":           types.ParseStatusFailed,
+		"error_message":          "Task interrupted due to application restart",
+		"pending_subtasks_count": 0,
+	})
 	if result.Error != nil {
 		logger.Warnf(context.Background(), "Failed to reset pending knowledge tasks: %v", result.Error)
 	} else if result.RowsAffected > 0 {
-		logger.Infof(context.Background(), "Reset %d stuck knowledge parsing tasks to failed state", result.RowsAffected)
+		logger.Infof(context.Background(),
+			"Reset %d stuck knowledge parsing tasks to failed state (distributed=%v)",
+			result.RowsAffected, distributed)
 	}
 
 	// 2. Reset knowledge summary tasks
-	resultSummary := db.Model(&types.Knowledge{}).
-		Where("summary_status IN ?", []string{types.SummaryStatusPending, types.SummaryStatusProcessing}).
-		Updates(map[string]interface{}{
-			"summary_status": types.SummaryStatusFailed,
-		})
+	resultSummary := summaryQuery.Updates(map[string]interface{}{
+		"summary_status": types.SummaryStatusFailed,
+	})
 	if resultSummary.Error != nil {
 		logger.Warnf(context.Background(), "Failed to reset pending summary tasks: %v", resultSummary.Error)
 	} else if resultSummary.RowsAffected > 0 {
-		logger.Infof(context.Background(), "Reset %d stuck summary generation tasks to failed state", resultSummary.RowsAffected)
+		logger.Infof(context.Background(),
+			"Reset %d stuck summary generation tasks to failed state (distributed=%v)",
+			resultSummary.RowsAffected, distributed)
 	}
 
 	// 3. Reset data source sync tasks
-	resultSync := db.Model(&types.SyncLog{}).
-		Where("status IN ?", []string{types.SyncLogStatusRunning, "pending"}).
-		Updates(map[string]interface{}{
-			"status":        types.SyncLogStatusFailed,
-			"error_message": "Sync interrupted due to application restart",
-			"end_time":      time.Now(),
-		})
+	resultSync := syncQuery.Updates(map[string]interface{}{
+		"status":        types.SyncLogStatusFailed,
+		"error_message": "Sync interrupted due to application restart",
+		"end_time":      time.Now(),
+	})
 	if resultSync.Error != nil {
 		logger.Warnf(context.Background(), "Failed to reset pending data source sync tasks: %v", resultSync.Error)
 	} else if resultSync.RowsAffected > 0 {
-		logger.Infof(context.Background(), "Reset %d stuck data source sync tasks to failed state", resultSync.RowsAffected)
+		logger.Infof(context.Background(),
+			"Reset %d stuck data source sync tasks to failed state (distributed=%v)",
+			resultSync.RowsAffected, distributed)
 	}
 }
 
@@ -1031,7 +1108,7 @@ func initRetrieveEngineRegistry(db *gorm.DB, cfg *config.Config) (interfaces.Ret
 			}
 		}
 
-		dsn := fmt.Sprintf("%s:%s@tcp(%s)/%s?charset=utf8mb4&parseTime=true&loc=Local",
+		dsn := fmt.Sprintf("%s:%s@tcp(%s)/%s?charset=utf8mb4&parseTime=true&loc=Local&interpolateParams=true",
 			dorisUsername, dorisPassword, dorisAddr, dorisDatabase)
 		dorisDB, err := sql.Open("mysql", dsn)
 		if err != nil {
@@ -1349,6 +1426,24 @@ func startDataSourceScheduler(scheduler *datasource.Scheduler, cleaner interface
 
 	cleaner.RegisterWithName("DataSourceScheduler", func() error {
 		scheduler.Stop()
+		return nil
+	})
+}
+
+// startHousekeepingService starts the knowledge housekeeping cron and registers
+// cleanup. This is the safety net that recovers any knowledge stuck in
+// "processing" past a configurable threshold (see HousekeepingService for
+// rationale). Best-effort: a startup error is logged but does NOT abort the
+// container — the rest of the system stays usable.
+func startHousekeepingService(svc *service.HousekeepingService, cleaner interfaces.ResourceCleaner) {
+	if svc == nil {
+		return
+	}
+	if err := svc.Start(context.Background()); err != nil {
+		logger.Warnf(context.Background(), "[Container] housekeeping start failed: %v", err)
+	}
+	cleaner.RegisterWithName("KnowledgeHousekeeping", func() error {
+		svc.Stop()
 		return nil
 	})
 }

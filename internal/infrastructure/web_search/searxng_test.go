@@ -5,11 +5,22 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 	"time"
+
+	"github.com/Tencent/WeKnora/internal/types"
+	"github.com/Tencent/WeKnora/internal/utils"
 )
 
 func TestValidateSearxngBaseURL(t *testing.T) {
+	utils.ResetSSRFWhitelistForTest()
+	os.Setenv("SSRF_WHITELIST", "127.0.0.1,localhost")
+	defer func() {
+		os.Unsetenv("SSRF_WHITELIST")
+		utils.ResetSSRFWhitelistForTest()
+	}()
+
 	cases := []struct {
 		name    string
 		url     string
@@ -18,9 +29,9 @@ func TestValidateSearxngBaseURL(t *testing.T) {
 		{name: "empty", url: "", wantErr: true},
 		{name: "no scheme", url: "searxng:8080", wantErr: true},
 		{name: "bad scheme", url: "ftp://searxng:8080", wantErr: true},
-		{name: "with query", url: "https://example.com/?x=1", wantErr: true},
-		{name: "with fragment", url: "https://example.com/#frag", wantErr: true},
-		{name: "public https", url: "https://example.com", wantErr: false},
+		{name: "with query", url: "http://127.0.0.1:8080/?x=1", wantErr: true},
+		{name: "with fragment", url: "http://127.0.0.1:8080/#frag", wantErr: true},
+		{name: "loopback ok via whitelist", url: "http://127.0.0.1:8888", wantErr: false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -57,6 +68,13 @@ func TestParseSearxngDate(t *testing.T) {
 }
 
 func TestSearxngProvider_Search(t *testing.T) {
+	utils.ResetSSRFWhitelistForTest()
+	os.Setenv("SSRF_WHITELIST", "127.0.0.1,localhost")
+	defer func() {
+		os.Unsetenv("SSRF_WHITELIST")
+		utils.ResetSSRFWhitelistForTest()
+	}()
+
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/search" {
 			http.NotFound(w, r)
@@ -79,7 +97,10 @@ func TestSearxngProvider_Search(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	provider := &SearxngProvider{client: srv.Client(), baseURL: srv.URL}
+	provider, err := NewSearxngProvider(types.WebSearchProviderParameters{BaseURL: srv.URL})
+	if err != nil {
+		t.Fatalf("NewSearxngProvider: %v", err)
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

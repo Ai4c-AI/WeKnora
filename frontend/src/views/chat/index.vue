@@ -45,7 +45,20 @@
                         </div>
                     </transition>
                 </div>
-                <div v-for="(session, index) in messagesList" :key="session.id || `${session.role}-${session.created_at}-${index}`">
+                <!--
+                  关键：必须用 session.id 作为 key，不能用 v-for 的索引。
+                  向上滚动加载历史时会插入一批消息（push/unshift）到列表，
+                  若用索引作 key 会让所有已渲染消息的 key 漂移，触发整个列表的销毁重建
+                  （botmsg / AgentStreamDisplay 全部重新挂载、markdown 重新渲染），
+                  这是历史加载时白屏 + layout shift 蔓延到 session 列表的根因。
+                  仅对极少数尚未拿到 id 的本地占位消息 fallback 到 role+created_at+index。
+                -->
+                <div
+                    v-for="(session, index) in messagesList"
+                    :key="session.id || `${session.role}-${session.created_at}-${index}`"
+                    class="msg-item-wrapper"
+                >
+
                     <div v-if="session.role == 'user'">
                         <usermsg :content="session.content" :mentioned_items="session.mentioned_items" :images="session.images" :attachments="session.attachments" :embeddedMode="embeddedMode"></usermsg>
                     </div>
@@ -92,7 +105,7 @@
 </template>
 <script setup>
 import { storeToRefs } from 'pinia';
-import { ref, onMounted, onUnmounted, nextTick, watch, reactive, onBeforeUnmount, defineProps } from 'vue';
+import { ref, onMounted, onUnmounted, nextTick, watch, reactive, markRaw, onBeforeUnmount, defineProps } from 'vue';
 import { useRoute, useRouter, onBeforeRouteLeave, onBeforeRouteUpdate } from 'vue-router';
 import InputField from '../../components/Input-field.vue';
 import botmsg from './components/botmsg.vue';
@@ -260,6 +273,16 @@ const getUserQuery = (index) => {
         return previous.content || '';
     }
     return '';
+};
+
+const findLastMessage = (predicate) => {
+    for (let i = messagesList.length - 1; i >= 0; i--) {
+        const item = messagesList[i];
+        if (predicate(item)) {
+            return item;
+        }
+    }
+    return undefined;
 };
 watch([() => route.params], (newvalue) => {
     isFirstEnter.value = true;
@@ -472,19 +495,20 @@ const handleMsgList = async (data, isScrollType = false, newScrollHeight) => {
             existingIds.add(item.id);
         }
         item.isAgentMode = false; // Agent 模式标记
-        item.agentEventStream = item.agentEventStream || [];
-        item._eventMap = new Map();
-        item._pendingToolCalls = new Map();
-        
+        // 历史消息的 agent_steps / agentEventStream 体量大、嵌套深，且是只读的，
+        // 用 markRaw 跳过 Vue 的深响应式转换，避免一次性 unshift 多条时主线程被 Proxy 转换卡住造成白屏。
+        item.agent_steps = item.agent_steps ? markRaw(item.agent_steps) : item.agent_steps;
+        item.agentEventStream = markRaw(item.agentEventStream || []);
+        item._eventMap = markRaw(new Map());
+        item._pendingToolCalls = markRaw(new Map());
+
         // Check if this message has agent_steps from database (historical agent conversation)
         // If so, reconstruct the agentEventStream to restore the exact conversation state
         if (item.agent_steps && Array.isArray(item.agent_steps) && item.agent_steps.length > 0) {
-            console.log('[Message Load] Reconstructing agent steps for message:', item.id, 'steps:', item.agent_steps.length);
             item.isAgentMode = true;
-            item.agentEventStream = reconstructEventStreamFromSteps(item.agent_steps, item.content, item.is_completed, item.is_fallback, item.agent_duration_ms || 0);
+            item.agentEventStream = markRaw(reconstructEventStreamFromSteps(item.agent_steps, item.content, item.is_completed, item.is_fallback, item.agent_duration_ms || 0));
             // 隐藏最终答案内容，因为它已经包含在 agentEventStream 的 answer 事件中
             item.hideContent = true;
-            console.log('[Message Load] Reconstructed', item.agentEventStream.length, 'events from agent steps');
         }
         
         if (item.content) {
@@ -718,7 +742,7 @@ onChunk((data) => {
         });
         
         // 检查是否是继续流式传输（消息已存在）
-        const existingMessage = messagesList.findLast((item) => item.id === data.id || item.request_id === data.id);
+        const existingMessage = findLastMessage((item) => item.id === data.id || item.request_id === data.id);
         if (!existingMessage) {
             // 新消息，设置 loading 状态
         loading.value = true;
@@ -769,7 +793,7 @@ onChunk((data) => {
             return;
         }
         // 非 Agent 模式：将 references 保存到消息中供 botmsg 使用
-        let existingMessage = messagesList.findLast((item) => item.request_id === data.id || item.id === data.id);
+        let existingMessage = findLastMessage((item) => item.request_id === data.id || item.id === data.id);
         
         // 如果消息还不存在，先创建一个空的 assistant 消息
         if (!existingMessage) {
@@ -817,7 +841,7 @@ onChunk((data) => {
     // 文案拼进 content，保留用户点停止时已经流式输出的内容不变。
     if (data.response_type === 'stop') {
         console.log('[Stop Event] Non-agent generation stopped');
-        const stoppedMessage = messagesList.findLast((item) => {
+        const stoppedMessage = findLastMessage((item) => {
             if (item.request_id === data.id) return true;
             return item.id === data.id;
         });
@@ -832,7 +856,7 @@ onChunk((data) => {
     }
 
     // 检查消息是否已经完成，如果已完成则忽略后续的完成事件（防止空内容覆盖）
-    const existingMessage = messagesList.findLast((item) => {
+    const existingMessage = findLastMessage((item) => {
         if (item.request_id === data.id) {
             return true
         }
@@ -888,7 +912,7 @@ onChunk((data) => {
 })
 // 处理 Agent 流式数据 (Cursor-style UI)
 const handleAgentChunk = (data) => {
-    let message = messagesList.findLast((item) => item.request_id === data.id || item.id === data.id);
+    let message = findLastMessage((item) => item.request_id === data.id || item.id === data.id);
     
     if (!message) {
         // 创建新的 Assistant 消息 - 此时开始显示内容，关闭 loading
@@ -1252,7 +1276,7 @@ const handleAgentChunk = (data) => {
 };
 
 const updateAssistantSession = (payload) => {
-    const message = messagesList.findLast((item) => {
+    const message = findLastMessage((item) => {
         if (item.request_id === payload.id) {
             return true
         }
@@ -1533,6 +1557,22 @@ onBeforeRouteUpdate((to, from, next) => {
     flex: 1;
     margin: 0 auto;
     width: 100%;
+
+    /*
+      给每条消息加 layout/style containment：
+      - 一条消息的内部布局变化不再让浏览器去 invalidate 整个文档，
+        这是修掉"hover 到 session 列表也变白"那个问题的关键。
+      - 不要再用 content-visibility: auto / contain-intrinsic-size：
+        agent 消息真实高度差异巨大（几百 ~ 数千 px），估的占位高度会让消息进入视口时
+        反复发生"占位 -> 真实高度"的大幅 layout shift + 首次 paint 滞后，
+        反而在向上滚动时制造"未画完"的白屏闪烁。
+        当前 handleMsgList 全流程 ~50ms，根本无需跳过渲染，老老实实正常渲染最稳。
+      - 不开 contain: paint：AgentStreamDisplay 里有 tooltip / popover 等会溢出的浮层，
+        paint containment 会把它们裁掉。
+    */
+    .msg-item-wrapper {
+        contain: layout style;
+    }
 
     .botanswer_laoding_gif {
         width: 24px;
