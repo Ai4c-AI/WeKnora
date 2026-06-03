@@ -32,6 +32,40 @@ public class ReasoningEngineTests
     }
 
     [Fact]
+    public void Reason_MultipleTransitiveRules_InfersIndirectRelationsForEachPredicate()
+    {
+        var dataGraph = new Graph();
+        var alice = dataGraph.CreateUriNode(new Uri(Ns + "alice"));
+        var bob = dataGraph.CreateUriNode(new Uri(Ns + "bob"));
+        var carol = dataGraph.CreateUriNode(new Uri(Ns + "carol"));
+        var wheel = dataGraph.CreateUriNode(new Uri(Ns + "wheel"));
+        var car = dataGraph.CreateUriNode(new Uri(Ns + "car"));
+        var fleet = dataGraph.CreateUriNode(new Uri(Ns + "fleet"));
+        var ancestorOf = dataGraph.CreateUriNode(new Uri(Ns + "ancestorOf"));
+        var partOf = dataGraph.CreateUriNode(new Uri(Ns + "partOf"));
+        dataGraph.Assert(alice, ancestorOf, bob);
+        dataGraph.Assert(bob, ancestorOf, carol);
+        dataGraph.Assert(wheel, partOf, car);
+        dataGraph.Assert(car, partOf, fleet);
+
+        var schemaGraph = new Graph();
+        var n3Rules = $"{{ ?a <{Ns}ancestorOf> ?b . ?b <{Ns}ancestorOf> ?c }} => {{ ?a <{Ns}ancestorOf> ?c }} .\n" +
+            $"{{ ?a <{Ns}partOf> ?b . ?b <{Ns}partOf> ?c }} => {{ ?a <{Ns}partOf> ?c }} .";
+
+        var engine = new ReasoningEngine();
+        var result = engine.Reason(dataGraph, schemaGraph, n3Rules);
+
+        Assert.Contains(result.Triples, t =>
+            t.Subject.Equals(alice) &&
+            t.Predicate.Equals(ancestorOf) &&
+            t.Object.Equals(carol));
+        Assert.Contains(result.Triples, t =>
+            t.Subject.Equals(wheel) &&
+            t.Predicate.Equals(partOf) &&
+            t.Object.Equals(fleet));
+    }
+
+    [Fact]
     public void Reason_EmptyRules_ReturnsOriginalTriples()
     {
         var dataGraph = new Graph();

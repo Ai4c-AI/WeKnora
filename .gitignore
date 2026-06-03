@@ -4,6 +4,7 @@
 !.env.example
 !.gitignore
 !.github/
+!**/.dockerignore
 
 # 敏感文件
 *.pem
@@ -71,3 +72,4 @@ artifacts/
 *.userosscache
 *.sln.docstates
 *.csproj.lscache
+.gstack/

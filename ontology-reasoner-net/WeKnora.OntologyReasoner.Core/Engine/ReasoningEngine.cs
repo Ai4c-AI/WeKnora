@@ -6,7 +6,7 @@ namespace WeKnora.OntologyReasoner.Core.Engine;
 public class ReasoningEngine
 {
     private static readonly Regex TransitiveRulePattern = new(
-        @"\?x\s+<(?<predicate>[^>]+)>\s+\?y\s*\.\s*\?y\s+<\k<predicate>>\s+\?z[\s\S]*\?x\s+<\k<predicate>>\s+\?z",
+        @"\?\w+\s+<(?<predicate>[^>]+)>\s+\?\w+\s*\.\s*\?\w+\s+<\k<predicate>>\s+\?\w+[\s\S]*\?\w+\s+<\k<predicate>>\s+\?\w+",
         RegexOptions.Compiled);
 
     public IGraph Reason(IGraph dataGraph, IGraph schemaGraph, string n3Rules, int maxIterations = 10)
@@ -15,16 +15,19 @@ public class ReasoningEngine
         working.Merge(dataGraph);
         working.Merge(schemaGraph);
 
-        var match = TransitiveRulePattern.Match(n3Rules);
-        if (!match.Success)
+        var predicates = TransitiveRulePattern.Matches(n3Rules)
+            .Select(match => match.Groups["predicate"].Value)
+            .Distinct(StringComparer.Ordinal)
+            .Select(predicate => working.CreateUriNode(new Uri(predicate)))
+            .ToList();
+        if (predicates.Count == 0)
         {
             return working;
         }
 
-        var predicate = working.CreateUriNode(new Uri(match.Groups["predicate"].Value));
         for (var iteration = 0; iteration < maxIterations; iteration++)
         {
-            var inferred = InferTransitiveTriples(working, predicate).ToList();
+            var inferred = predicates.SelectMany(predicate => InferTransitiveTriples(working, predicate)).ToList();
             var added = false;
             foreach (var triple in inferred)
             {

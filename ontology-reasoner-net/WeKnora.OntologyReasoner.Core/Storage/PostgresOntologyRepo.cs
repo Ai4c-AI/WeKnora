@@ -5,7 +5,7 @@ using WeKnora.OntologyReasoner.Core.Models;
 
 namespace WeKnora.OntologyReasoner.Core.Storage;
 
-public class PostgresOntologyRepo
+public class PostgresOntologyRepo : IOntologyRepo
 {
     private readonly string _connectionString;
 
@@ -14,7 +14,10 @@ public class PostgresOntologyRepo
         _connectionString = connectionString;
     }
 
-    public async Task<List<(MicroTBox TBox, List<TripleDto> Facts, string ChunkId)>> GetChunkOntologies(IReadOnlyList<string> chunkIds)
+    public async Task<List<OntologyChunkData>> GetChunkOntologies(
+        ulong tenantId,
+        IReadOnlyList<string> knowledgeBaseIds,
+        IReadOnlyList<string> chunkIds)
     {
         if (chunkIds.Count == 0)
         {
@@ -24,11 +27,18 @@ public class PostgresOntologyRepo
         await using var conn = new NpgsqlConnection(_connectionString);
         await conn.OpenAsync();
 
-        var rows = await conn.QueryAsync<(string id, string? ontology_json, string? instance_facts_json)>(
-            "SELECT id, ontology_json::text, instance_facts_json::text FROM chunks WHERE id = ANY(@ids) AND ontology_json IS NOT NULL",
-            new { ids = chunkIds.ToArray() });
+        var rows = await conn.QueryAsync<(string id, string knowledge_base_id, string? ontology_json, string? instance_facts_json)>(
+            """
+            SELECT id, knowledge_base_id, ontology_json::text, instance_facts_json::text
+            FROM chunks
+            WHERE tenant_id = @tenantId
+              AND knowledge_base_id = ANY(@knowledgeBaseIds)
+              AND id = ANY(@ids)
+              AND ontology_json IS NOT NULL
+            """,
+            new { tenantId, knowledgeBaseIds = knowledgeBaseIds.ToArray(), ids = chunkIds.ToArray() });
 
-        var results = new List<(MicroTBox, List<TripleDto>, string)>();
+        var results = new List<OntologyChunkData>();
         foreach (var row in rows)
         {
             var tbox = JsonSerializer.Deserialize<MicroTBox>(row.ontology_json!);
@@ -40,7 +50,7 @@ public class PostgresOntologyRepo
             var facts = row.instance_facts_json is not null
                 ? JsonSerializer.Deserialize<List<TripleDto>>(row.instance_facts_json) ?? []
                 : [];
-            results.Add((tbox, facts, row.id));
+            results.Add(new OntologyChunkData(tbox, facts, row.id, row.knowledge_base_id));
         }
 
         return results;

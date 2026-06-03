@@ -10,7 +10,7 @@ public class PostgresOntologyRepoTests
     {
         var repo = new PostgresOntologyRepo("Host=invalid;Username=invalid;Password=invalid;Database=invalid");
 
-        var result = await repo.GetChunkOntologies([]);
+        var result = await repo.GetChunkOntologies(1, ["kb-1"], []);
 
         Assert.Empty(result);
     }
