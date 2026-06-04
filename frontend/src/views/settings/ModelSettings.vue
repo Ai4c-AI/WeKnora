@@ -1,18 +1,14 @@
 <template>
   <div class="model-settings">
     <div class="section-header">
-      <div class="section-header__top">
+      <div class="section-header__top" data-guide="settings-models">
         <div class="section-header__text">
           <h2>{{ $t('modelSettings.title') }}</h2>
           <p class="section-description">{{ $t('modelSettings.description') }}</p>
         </div>
-        <t-dropdown
-          v-if="authStore.hasRole('admin')"
-          :options="addModelOptions"
-          placement="bottom-right"
-          @click="(data: any) => openAddDialog(data.value)"
-        >
-          <t-button theme="primary" variant="outline" size="small">
+        <t-dropdown v-if="authStore.hasRole('admin')" :options="addModelOptions" placement="bottom-right"
+          @click="(data: any) => openAddDialog(data.value)">
+          <t-button theme="primary" variant="outline" size="small" data-guide="settings-add-model">
             <template #icon><add-icon /></template>
             {{ $t('modelSettings.actions.addModel') }}
           </t-button>
@@ -40,78 +36,67 @@
       <t-tab-panel value="asr" :label="`${$t('modelSettings.typeShort.asr')}(${countByType('asr')})`" />
     </t-tabs>
 
-    <div v-if="filteredModels.length > 0" class="model-grid">
-      <!--
-        Model card (this page only). 我们刻意不复用 SettingCard：
-        模型卡需要左侧类型徽章 + 多级元信息，而 SettingCard 还在 Mcp /
-        WebSearch 页用，加 prefix 槽给单一消费者属于过度抽象。
-      -->
-      <div
-        v-for="model in filteredModels"
-        :key="`${model._modelType}-${model.id}`"
-        class="model-card"
-        :class="[`model-card--${model._modelType}`, { 'model-card--builtin': model.isBuiltin }]"
-      >
-        <div class="model-card__badge" :aria-label="typeLabel(model._modelType)">
-          <t-icon :name="typeIcon(model._modelType)" size="18px" />
-        </div>
-        <div class="model-card__body">
-          <div class="model-card__header">
-            <h3 class="model-card__title" :title="model.name">{{ modelDisplayName(model) }}</h3>
-            <span v-if="model.isBuiltin" class="model-card__pill">
-              {{ $t('modelSettings.builtinTag') }}
-            </span>
-            <t-dropdown
-              v-if="getModelOptions(model._modelType, model).length > 0"
-              :options="getModelOptions(model._modelType, model)"
-              placement="bottom-right"
-              attach="body"
-              trigger="click"
-              @click="(data: any) => handleMenuAction({ value: data.value }, model._modelType, model)"
-            >
-              <t-button variant="text" shape="square" size="small" class="model-card__more">
-                <t-icon name="ellipsis" />
-              </t-button>
-            </t-dropdown>
+    <t-loading :loading="loading" size="small" class="model-list-loading">
+      <div v-if="filteredModels.length > 0" class="model-grid">
+        <div v-for="model in filteredModels" :key="`${model._modelType}-${model.id}`" class="model-card" :class="[
+          `model-card--${model._modelType}`,
+          {
+            'model-card--builtin': model.isBuiltin,
+            'model-card--clickable': isModelCardClickable(model),
+          },
+        ]" :role="isModelCardClickable(model) ? 'button' : undefined"
+          :tabindex="isModelCardClickable(model) ? 0 : undefined"
+          @click="onModelCardClick($event, model._modelType, model)"
+          @keydown.enter="onModelCardClick($event, model._modelType, model)">
+          <div class="model-card__badge" :aria-label="typeLabel(model._modelType)">
+            <t-icon :name="typeIcon(model._modelType)" size="18px" />
           </div>
-          <div class="model-card__subtitle">
-            <span class="model-card__type">{{ typeLabel(model._modelType) }}</span>
-            <span class="model-card__sep">·</span>
-            <span class="model-card__source">
-              {{ model.source === 'local' ? 'Ollama' : sourceLabel(model._modelType) }}
-            </span>
-            <template v-if="model._modelType === 'embedding' && model.dimension">
-              <span class="model-card__sep">·</span>
-              <span>{{ $t('model.editor.dimensionLabel') }} {{ model.dimension }}</span>
-            </template>
-          </div>
-          <div v-if="model.displayName" class="model-card__raw-name" :title="model.name">
-            {{ $t('modelSettings.rawModelName') }}: {{ model.name }}
-          </div>
-          <div v-if="model.baseUrl" class="model-card__url" :title="model.baseUrl">
-            {{ model.baseUrl }}
-          </div>
-          <div v-else-if="model.source === 'local'" class="model-card__url model-card__url--muted">
-            Ollama local
+          <div class="model-card__body">
+            <div class="model-card__header">
+              <h3 class="model-card__title">{{ modelDisplayName(model) }}</h3>
+              <span v-if="model.isBuiltin" class="model-card__lock" :title="$t('modelSettings.builtinTag')"
+                :aria-label="$t('modelSettings.builtinTag')">
+                <t-icon name="lock-on" />
+              </span>
+              <div v-if="getModelOptions(model._modelType, model).length > 0" class="model-card__actions" @click.stop>
+                <t-dropdown :options="getModelOptions(model._modelType, model)" placement="bottom-right" attach="body"
+                  trigger="click"
+                  @click="(data: any) => handleMenuAction({ value: data.value }, model._modelType, model)">
+                  <t-button variant="text" shape="square" size="small" class="model-card__more">
+                    <t-icon name="ellipsis" />
+                  </t-button>
+                </t-dropdown>
+              </div>
+            </div>
+            <p class="model-card__subtitle">
+              <span>{{ vendorLabel(model) }}</span>
+              <template v-if="model._modelType === 'embedding' && model.dimension">
+                <span class="model-card__sep">·</span>
+                <span>{{ $t('model.editor.dimensionLabel') }} {{ model.dimension }}</span>
+              </template>
+              <template v-if="model._modelType === 'chat' && model.supportsVision">
+                <span class="model-card__sep">·</span>
+                <span class="model-card__vision" :title="$t('model.editor.supportsVisionLabel')"
+                  :aria-label="$t('model.editor.supportsVisionLabel')">
+                  <t-icon name="image" size="12px" />
+                </span>
+              </template>
+            </p>
           </div>
         </div>
       </div>
-    </div>
-    <div v-else class="empty-state">
-      <t-empty :description="emptyHint">
-        <t-dropdown
-          v-if="authStore.hasRole('admin')"
-          :options="addModelOptions"
-          placement="bottom"
-          @click="(data: any) => openAddDialog(data.value)"
-        >
-          <t-button theme="primary" variant="outline" size="small">
-            <template #icon><add-icon /></template>
-            {{ $t('modelSettings.actions.addModel') }}
-          </t-button>
-        </t-dropdown>
-      </t-empty>
-    </div>
+      <div v-else-if="!loading" class="empty-state">
+        <t-empty :description="emptyHint">
+          <t-dropdown v-if="authStore.hasRole('admin')" :options="addModelOptions" placement="bottom"
+            @click="(data: any) => openAddDialog(data.value)">
+            <t-button theme="primary" variant="outline" size="small">
+              <template #icon><add-icon /></template>
+              {{ $t('modelSettings.actions.addModel') }}
+            </t-button>
+          </t-dropdown>
+        </t-empty>
+      </div>
+    </t-loading>
 
     <!-- 模型编辑器抽屉 -->
     <ModelEditorDialog v-model:visible="showDialog" :model-type="currentModelType" :model-data="editingModel"
@@ -130,7 +115,7 @@ import { useConfirmDelete } from '@/components/settings/useConfirmDelete'
 import { listModels, createModel, updateModel as updateModelAPI, deleteModel as deleteModelAPI, type ModelConfig } from '@/api/model'
 import { useAuthStore } from '@/stores/auth'
 
-const { t } = useI18n()
+const { t, te } = useI18n()
 const authStore = useAuthStore()
 const confirmDelete = useConfirmDelete()
 
@@ -176,6 +161,7 @@ function convertToLegacyFormat(model: ModelConfig) {
     customHeaders: model.parameters.custom_headers
       ? Object.entries(model.parameters.custom_headers).map(([key, value]) => ({ key, value: String(value) }))
       : [],
+    lkeapRegion: model.parameters.extra_config?.region || 'ap-guangzhou',
     _modelType: backendTypeToModelType[model.type] || 'chat' as ModelType,
     // Preserve the credential metadata map so the editor dialog can render
     // the "Configured" state without an extra round-trip.
@@ -232,6 +218,36 @@ const sourceLabel = (type: ModelType) => {
   return t('modelSettings.source.remote')
 }
 
+// Maps a backend `provider` id (e.g. "openai", "aliyun", "weknoracloud")
+// to its localized short label. Reuses the same i18n keys the editor's
+// provider dropdown uses, so the model card and the editor stay in sync
+// when a provider is renamed. Falls back to '' when the backend didn't
+// store a provider — caller falls back to sourceLabel().
+const providerLabel = (model: any): string => {
+  const id = model.provider
+  if (!id) return ''
+  const key = `model.editor.providers.${id}.label`
+  return te(key) ? t(key) : id
+}
+
+// What the vendor chip on a card shows. Keeps the chip text uniformly
+// short so cards line up:
+//   local  → "Ollama"
+//   remote → provider's localized short name (e.g. "腾讯云 LKEAP",
+//            "阿里云 DashScope"). For the catch-all "generic" provider
+//            we render a single short word ("自定义" / "Custom") — the
+//            editor dropdown's longer "自定义 (OpenAI兼容接口)" label
+//            blows out the card chip row, and the "OpenAI 兼容" framing
+//            isn't meaningful to most end users (they didn't pick "I
+//            want OpenAI compatibility", they just pasted a base URL).
+const vendorLabel = (model: any): string => {
+  if (model.source === 'local') return 'Ollama'
+  if (model.provider === 'generic') {
+    return t('modelSettings.source.custom')
+  }
+  return providerLabel(model) || sourceLabel(model._modelType)
+}
+
 const modelDisplayName = (model: any) => {
   const displayName = typeof model.displayName === 'string' ? model.displayName.trim() : ''
   return displayName || model.name
@@ -270,10 +286,29 @@ const openAddDialog = (type: ModelType) => {
   showDialog.value = true
 }
 
+// 可点击打开编辑抽屉：管理员 + 非内置模型
+const isModelCardClickable = (model: any) =>
+  authStore.hasRole('admin') && !model.isBuiltin
+
+const onModelCardClick = (event: Event, type: ModelType, model: any) => {
+  if (!isModelCardClickable(model)) return
+  if (event.type === 'keydown') {
+    const ke = event as KeyboardEvent
+    if (ke.key !== 'Enter' && ke.key !== ' ') return
+    ke.preventDefault()
+  }
+  const target = event.target as HTMLElement | null
+  if (target?.closest('.model-card__actions')) return
+  editModel(type, model)
+}
+
 // 编辑模型
 const editModel = (type: ModelType, model: any) => {
   if (model.isBuiltin) {
     MessagePlugin.warning(t('modelSettings.toasts.builtinCannotEdit'))
+    return
+  }
+  if (!authStore.hasRole('admin')) {
     return
   }
   currentModelType.value = type
@@ -337,6 +372,17 @@ const handleModelSave = async (modelData: any) => {
     const trimmedApiKey = (modelData.apiKey ?? '').trim()
     const apiKeyFields: { api_key?: string } =
       !editingModel.value && trimmedApiKey ? { api_key: trimmedApiKey } : {}
+    const trimmedAppSecret = (modelData.appSecret ?? '').trim()
+    const appSecretFields: { app_secret?: string } =
+      !editingModel.value && trimmedAppSecret ? { app_secret: trimmedAppSecret } : {}
+    const lkeapExtra =
+      modelData.provider === 'lkeap' && currentModelType.value === 'rerank'
+        ? {
+            extra_config: {
+              region: (modelData.lkeapRegion || 'ap-guangzhou').trim(),
+            },
+          }
+        : {}
 
     const apiModelData: ModelConfig = {
       name: modelData.modelName.trim(),
@@ -347,7 +393,9 @@ const handleModelSave = async (modelData: any) => {
       parameters: {
         base_url: modelData.baseUrl?.trim() || '',
         ...apiKeyFields,
+        ...appSecretFields,
         provider: modelData.provider || '',
+        ...lkeapExtra,
         ...(Object.keys(customHeadersMap).length > 0 ? { custom_headers: customHeadersMap } : {}),
         ...(currentModelType.value === 'embedding' && modelData.dimension ? {
           embedding_parameters: {
@@ -576,6 +624,10 @@ onMounted(() => {
   }
 }
 
+.model-list-loading {
+  min-height: 120px;
+}
+
 .model-type-tabs {
   margin-bottom: 16px;
 
@@ -612,12 +664,13 @@ onMounted(() => {
   gap: 12px;
 }
 
-// 模型卡片 —— 左侧类型徽章 + 标题 / 副标题 / baseUrl 三段式
+// 模型卡片 —— 可选类型徽章（仅「全部」Tab）+ 标题 + 一行副标题
 .model-card {
+  position: relative;
   display: flex;
   align-items: flex-start;
   gap: 12px;
-  padding: 14px 14px 14px 12px;
+  padding: 14px 16px;
   border: 1px solid var(--td-component-stroke);
   border-radius: 10px;
   background: var(--td-bg-color-container);
@@ -632,13 +685,23 @@ onMounted(() => {
   &--builtin {
     background: var(--td-bg-color-secondarycontainer);
 
-    .model-card__title {
-      color: var(--td-text-color-secondary);
-    }
-
     &:hover {
       box-shadow: none;
       border-color: var(--td-component-stroke);
+    }
+  }
+
+  &--clickable {
+    cursor: pointer;
+
+    &:hover {
+      border-color: var(--td-brand-color-3, var(--td-brand-color));
+      box-shadow: 0 4px 14px rgba(15, 23, 42, 0.06);
+    }
+
+    &:focus-visible {
+      outline: 2px solid var(--td-brand-color);
+      outline-offset: 2px;
     }
   }
 }
@@ -688,7 +751,8 @@ onMounted(() => {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  justify-content: center;
+  gap: 2px;
 }
 
 .model-card__header {
@@ -711,15 +775,57 @@ onMounted(() => {
   white-space: nowrap;
 }
 
-.model-card__pill {
+/*
+  Built-in lock indicator. Most cards in a typical install ARE built-in,
+  so loud styling everywhere becomes noise — instead the lock is muted
+  and small by default, and lights up on hover. The signal that matters
+  to users is "which models did I add" → user-added cards stand out by
+  the absence of the lock.
+*/
+.model-card__lock {
   flex-shrink: 0;
-  padding: 1px 6px;
-  font-size: 11px;
-  font-weight: 500;
-  line-height: 16px;
-  color: var(--td-warning-color-7, #B85C00);
-  background: var(--td-warning-color-1, #FEF3E6);
-  border-radius: 3px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  color: var(--td-text-color-placeholder);
+  opacity: 0.6;
+  transition: color 0.15s ease, opacity 0.15s ease;
+
+  .t-icon {
+    font-size: 13px;
+  }
+}
+
+.model-card:hover .model-card__lock {
+  opacity: 1;
+  color: var(--td-text-color-secondary);
+}
+
+.model-card__subtitle {
+  margin: 2px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--td-text-color-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-card__sep {
+  margin: 0 4px;
+  color: var(--td-text-color-placeholder);
+}
+
+.model-card__vision {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.model-card__actions {
+  flex-shrink: 0;
 }
 
 .model-card__more {
@@ -736,56 +842,11 @@ onMounted(() => {
   }
 }
 
-// Hover / 键盘焦点 / 菜单已展开 时显示，避免静态卡片上有"杂物"。
+// Hover / 键盘焦点 时显示更多菜单，避免静态卡片上有"杂物"。
 .model-card:hover .model-card__more,
-.model-card:focus-within .model-card__more {
+.model-card:focus-within .model-card__more,
+.model-card__actions:focus-within .model-card__more {
   opacity: 1;
-}
-
-.model-card__subtitle {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 4px;
-  font-size: 12px;
-  line-height: 1.4;
-  color: var(--td-text-color-secondary);
-  min-width: 0;
-}
-
-.model-card__raw-name {
-  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
-  font-size: 12px;
-  line-height: 1.4;
-  color: var(--td-text-color-placeholder);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.model-card__type {
-  font-weight: 500;
-  color: var(--td-text-color-secondary);
-}
-
-.model-card__sep {
-  color: var(--td-text-color-placeholder);
-}
-
-.model-card__url {
-  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
-  font-size: 11px;
-  line-height: 1.4;
-  color: var(--td-text-color-placeholder);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  min-width: 0;
-}
-
-.model-card__url--muted {
-  font-family: inherit;
-  font-style: italic;
 }
 
 .empty-state {
@@ -798,5 +859,4 @@ onMounted(() => {
     margin-bottom: 16px;
   }
 }
-
 </style>

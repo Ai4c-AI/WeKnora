@@ -194,6 +194,7 @@ type wikiIngestService struct {
 	wikiService    interfaces.WikiPageService
 	kbService      interfaces.KnowledgeBaseService
 	knowledgeSvc   interfaces.KnowledgeService
+	knowledgeRepo  interfaces.KnowledgeRepository
 	chunkRepo      interfaces.ChunkRepository
 	modelService   interfaces.ModelService
 	task           interfaces.TaskEnqueuer
@@ -218,6 +219,7 @@ func NewWikiIngestService(
 	wikiService interfaces.WikiPageService,
 	kbService interfaces.KnowledgeBaseService,
 	knowledgeSvc interfaces.KnowledgeService,
+	knowledgeRepo interfaces.KnowledgeRepository,
 	chunkRepo interfaces.ChunkRepository,
 	modelService interfaces.ModelService,
 	task interfaces.TaskEnqueuer,
@@ -231,6 +233,7 @@ func NewWikiIngestService(
 		wikiService:    wikiService,
 		kbService:      kbService,
 		knowledgeSvc:   knowledgeSvc,
+		knowledgeRepo:  knowledgeRepo,
 		chunkRepo:      chunkRepo,
 		modelService:   modelService,
 		task:           task,
@@ -506,6 +509,25 @@ func (s *wikiIngestService) trimPendingList(ctx context.Context, ids []int64) {
 	}
 }
 
+// finalizeWikiSubtask releases this knowledge's slot in the finalizing
+// counter once its wiki op reaches a terminal state (mapped successfully
+// or dead-lettered). The matching +1 is seeded by
+// KnowledgePostProcess.SetFinalizing when willSpawnWiki is true. Callers
+// must only invoke this for ingest ops — retract ops are for deleted
+// knowledge that has no counter to drain.
+//
+// Safe to call on a row that is already completed or whose counter is
+// already zero: FinalizeSubtask guards both the decrement (count > 0) and
+// the promote (parse_status = finalizing AND count = 0), so an op enqueued
+// before this accounting shipped is a harmless no-op.
+func (s *wikiIngestService) finalizeWikiSubtask(ctx context.Context, knowledgeID string) {
+	// Wiki is only finalized when its op reaches a terminal state, so this is
+	// always an intended drain (retErr=nil, final=true). Detached context: the
+	// wiki batch worker may be mid-shutdown or have a cancelled ctx when this
+	// runs; a swallowed failure would strand the parent in "finalizing".
+	finalizeSubtaskDetached(ctx, s.knowledgeRepo, knowledgeID, "wiki", nil, false, true)
+}
+
 // requeueFailedOps records in-batch failures.
 //
 // For each failed op:
@@ -544,7 +566,14 @@ func (s *wikiIngestService) requeueFailedOps(ctx context.Context, payload WikiIn
 			continue
 		}
 
-		// Exhausted in-batch retries — archive and remove.
+		// Exhausted in-batch retries — archive and remove. This is the
+		// terminal failure point for the op, so release its slot in the
+		// knowledge's finalizing counter (ingest ops only; retracts are
+		// for deleted knowledge that has no counter to drain). The
+		// matching +1 was seeded by KnowledgePostProcess.SetFinalizing.
+		if op.Op == WikiOpIngest {
+			s.finalizeWikiSubtask(ctx, op.KnowledgeID)
+		}
 		logger.Warnf(ctx, "wiki ingest: dropping op %s (%s) after %d failures (limit %d)", op.KnowledgeID, op.DocTitle, count, wikiMaxFailRetries)
 		if s.deadLetterRepo != nil {
 			payloadBytes, _ := json.Marshal(op)
@@ -1849,47 +1878,8 @@ func reconstructContent(chunks []*types.Chunk) string {
 		}
 	}
 
-	// Sort by StartAt, then ChunkIndex
-	sort.Slice(textChunks, func(i, j int) bool {
-		if textChunks[i].StartAt == textChunks[j].StartAt {
-			return textChunks[i].ChunkIndex < textChunks[j].ChunkIndex
-		}
-		return textChunks[i].StartAt < textChunks[j].StartAt
-	})
-
-	var sb strings.Builder
-	lastEndAt := -1
-	for _, c := range textChunks {
-		toAppend := c.Content
-
-		if c.StartAt > lastEndAt || c.EndAt == 0 {
-			// Non-overlapping or missing position info
-			if sb.Len() > 0 {
-				sb.WriteString("\n")
-			}
-			sb.WriteString(toAppend)
-			if c.EndAt > 0 {
-				lastEndAt = c.EndAt
-			}
-		} else if c.EndAt > lastEndAt {
-			// Partial overlap
-			contentRunes := []rune(toAppend)
-			offset := len(contentRunes) - (c.EndAt - lastEndAt)
-			if offset >= 0 && offset < len(contentRunes) {
-				sb.WriteString(string(contentRunes[offset:]))
-			} else {
-				// Fallback if offset calculation is invalid
-				if sb.Len() > 0 {
-					sb.WriteString("\n")
-				}
-				sb.WriteString(toAppend)
-			}
-			lastEndAt = c.EndAt
-		}
-		// If c.EndAt <= lastEndAt, it's fully contained, so skip appending text
-	}
-
-	return sb.String()
+	// 重叠去重与排序统一交给公共逻辑（按文本匹配，兼容补写表头 / HTML 实体）。
+	return searchutil.MergeTextChunks(textChunks, "\n")
 }
 
 // reconstructEnrichedContent rebuilds document text and inlines image_info

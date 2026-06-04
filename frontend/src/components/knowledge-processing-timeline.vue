@@ -2,7 +2,7 @@
 import { ref, reactive, onMounted, onBeforeUnmount, watch, computed, nextTick } from 'vue'
 import { MessagePlugin } from 'tdesign-vue-next'
 import { useI18n } from 'vue-i18n'
-import { getKnowledgeSpans, reparseKnowledge } from '@/api/knowledge-base/index'
+import { getKnowledgeSpans, reparseKnowledge, cancelKnowledgeParse } from '@/api/knowledge-base/index'
 import { knowledgeSpansPayloadHasTrace } from '@/utils/knowledgeTrace'
 
 interface SpanNode {
@@ -461,6 +461,32 @@ async function onRetry() {
 async function onManualRefresh() {
   if (refreshing.value || loading.value) return
   await fetchSpans({ manual: true })
+}
+
+const cancelling = ref(false)
+
+// Mirrors the backend CancelKnowledgeParse gate (pending / processing /
+// finalizing). Uses the freshest status we have: live span data first,
+// the parent's hint before the first fetch lands.
+const canCancelParse = computed<boolean>(() => {
+  const status = data.value?.parse_status ?? props.parseStatus
+  return isPolling(status)
+})
+
+async function onCancelParseConfirm() {
+  if (cancelling.value) return
+  const id = props.knowledgeId
+  if (!id) return
+  cancelling.value = true
+  try {
+    await cancelKnowledgeParse(id)
+    MessagePlugin.success(t('knowledgeBase.cancelParseSubmitted'))
+    await fetchSpans({ manual: true })
+  } catch (e: any) {
+    MessagePlugin.error(e?.message || t('knowledgeBase.cancelParseFailed'))
+  } finally {
+    cancelling.value = false
+  }
 }
 
 function onAttemptChange(n: number) {
@@ -1068,14 +1094,56 @@ function attemptGlyph(status: string): { ch: string; cls: string } {
   }
 }
 
+// True when the panel is showing the most recent attempt (or there's
+// only one). Historical attempts must keep their own per-attempt
+// trace.status; only the latest attempt's header should defer to the
+// knowledge-level parse_status.
+const viewingLatestAttempt = computed<boolean>(() => {
+  const latest = data.value?.latest_attempt || 0
+  if (latest <= 1) return true
+  const active = selectedAttempt.value ?? data.value?.attempt ?? latest
+  return active === latest
+})
+
+// Project the knowledge-level parse_status onto the trace-span status
+// vocabulary localizedStatus() speaks, so the header badge reads the
+// same whether it comes from the root span or from parse_status.
+// 'finalizing' keeps its own label ("优化中") to match the doc card.
+function parseStatusToTraceStatus(s?: string): string {
+  switch (s) {
+    case 'completed':
+      return 'done'
+    case 'processing':
+      return 'running'
+    case 'finalizing':
+      return 'finalizing'
+    default:
+      return s || ''
+  }
+}
+
+// The authoritative status for the header badge. During the async
+// post-pipeline window (summary / question / graph / wiki), the latest
+// attempt's ROOT span closes — so trace.status reads 'done' — while
+// those subspans keep running and the row is still 'finalizing'.
+// Trusting trace.status there flashes "已完成" mid-wiki even though the
+// doc card (and LIVE badge) still say "优化中". Prefer parse_status while
+// it is non-terminal on the latest attempt so all three agree.
+const headerStatus = computed(() => {
+  const parseStatus = data.value?.parse_status
+  if (viewingLatestAttempt.value && isPolling(parseStatus)) {
+    return parseStatusToTraceStatus(parseStatus)
+  }
+  return data.value?.trace?.status || parseStatusToTraceStatus(parseStatus)
+})
+
 const headerStatusText = computed(() => {
-  const s = data.value?.trace?.status || data.value?.parse_status || ''
+  const s = headerStatus.value
   return s ? localizedStatus(s) : ''
 })
 
 const headerStatusTheme = computed(() => {
-  const s = data.value?.trace?.status || data.value?.parse_status || ''
-  switch (s) {
+  switch (headerStatus.value) {
     case 'done':
     case 'completed':
       return 'success'
@@ -1084,6 +1152,7 @@ const headerStatusTheme = computed(() => {
     case 'running':
     case 'processing':
     case 'pending':
+    case 'finalizing':
       return 'warning'
     default:
       return 'default'
@@ -1273,6 +1342,22 @@ const stageBreakdown = computed<StageRowSummary[]>(() => {
                 @click="onManualRefresh">
                 <t-icon name="refresh" size="14px" />
               </button>
+              <t-popconfirm
+                v-if="canCancelParse"
+                theme="warning"
+                :content="t('knowledgeBase.cancelParseConfirmBody', { title: props.docTitle || props.knowledgeId })"
+                :confirm-btn="{ content: t('knowledgeBase.cancelParse'), theme: 'danger' }"
+                :cancel-btn="{ content: t('common.cancel') }"
+                placement="bottom"
+                @confirm="onCancelParseConfirm"
+              >
+                <button type="button" class="kp-icon-btn kp-icon-btn-danger"
+                  :class="{ 'kp-icon-btn-spin': cancelling }" :disabled="cancelling"
+                  :title="t('knowledgeBase.cancelParse')" :aria-label="t('knowledgeBase.cancelParse')"
+                  @click.stop>
+                  <t-icon :name="cancelling ? 'loading' : 'close-circle'" size="15px" />
+                </button>
+              </t-popconfirm>
               <t-button v-if="data?.parse_status === 'failed'" size="small" theme="primary" variant="outline"
                 @click="onRetry">
                 <t-icon name="refresh" size="14px" />
@@ -1792,6 +1877,14 @@ const stageBreakdown = computed<StageRowSummary[]>(() => {
 .kp-icon-btn:disabled {
   cursor: not-allowed;
   opacity: 0.4;
+}
+
+/* Stop-parse control — stays a quiet placeholder icon until hover, then
+   reveals its destructive intent with the error tint. Matches the other
+   header icon buttons rather than shouting with a full outline button. */
+.kp-icon-btn-danger:hover:not(:disabled) {
+  background: var(--td-error-color-light);
+  color: var(--td-error-color);
 }
 
 .kp-icon-btn-spin :deep(.t-icon) {

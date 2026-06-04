@@ -425,7 +425,7 @@ func (s *wikiIngestService) ProcessWikiIngest(ctx context.Context, t *asynq.Task
 						RetractDocContent: op.DocSummary,
 						DocTitle:          op.DocTitle,
 						KnowledgeID:       op.KnowledgeID,
-						Language:          op.Language,
+						Language:          types.LanguageLocaleName(op.Language),
 					})
 				}
 				mapMu.Unlock()
@@ -464,6 +464,21 @@ func (s *wikiIngestService) ProcessWikiIngest(ctx context.Context, t *asynq.Task
 				// scrub. Compare with the legacy Redis path, which kept
 				// a separate wiki:failcount:<...> key alive for 24h
 				// regardless of whether the original op had drained.
+				//
+				// The finalizing slot is drained later (after reduce +
+				// publish) in the docResults loop, so "completed" only
+				// arrives once wiki is fully written.
+			} else {
+				// err == nil && result == nil: mapOneDocument skipped this
+				// doc at a terminal, non-retryable state (knowledge
+				// deleted / no chunks / insufficient text). It produces no
+				// docResult and is not a failedOp, so neither the success
+				// nor the dead-letter drain path will fire. Release the
+				// finalizing slot here so the row doesn't hang in
+				// "finalizing" until the housekeeping sweep marks it
+				// failed. The matching +1 was seeded by
+				// KnowledgePostProcess.SetFinalizing.
+				s.finalizeWikiSubtask(mapCtx, op.KnowledgeID)
 			}
 			return nil
 		})
@@ -667,7 +682,17 @@ func (s *wikiIngestService) ProcessWikiIngest(ctx context.Context, t *asynq.Task
 	// failed).
 	failedAdditionSlugCount := len(failedAdditionSlugs)
 	for _, r := range docResults {
-		if r == nil || r.WikiSpan == nil {
+		if r == nil {
+			continue
+		}
+		// A successfully-mapped doc is terminal for its wiki op, so
+		// release the knowledge's slot in pending_subtasks_count (the row
+		// promotes to completed once the counter hits zero). Done before
+		// the WikiSpan nil-check below so a doc that had no attempt to
+		// attach a span to still drains its counter slot. The matching +1
+		// is seeded by KnowledgePostProcess.SetFinalizing.
+		s.finalizeWikiSubtask(ctx, r.KnowledgeID)
+		if r.WikiSpan == nil {
 			continue
 		}
 		writtenPages := make([]map[string]string, 0, len(r.Pages))
@@ -745,7 +770,7 @@ func (s *wikiIngestService) mapOneDocument(
 ) (*docIngestResult, []SlugUpdate, error) {
 	docStartedAt := time.Now()
 	knowledgeID := op.KnowledgeID
-	lang := op.Language
+	lang := types.LanguageLocaleName(op.Language)
 
 	// Open a postprocess.wiki subspan under the parent attempt's
 	// postprocess stage so the actual per-doc work (LLM extraction +

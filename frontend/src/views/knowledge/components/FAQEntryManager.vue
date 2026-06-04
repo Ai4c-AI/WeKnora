@@ -184,7 +184,8 @@
                   <div class="tag-edit-input">
                     <t-input ref="newTagInputRef" v-model="newTagName" size="small" :maxlength="40"
                       :placeholder="$t('knowledgeBase.tagNamePlaceholder')"
-                      @keydown.enter.stop.prevent="submitCreateTag" @keydown.esc.stop.prevent="cancelCreateTag" />
+                      @enter="submitCreateTag"
+                      @keydown="(_v, ctx) => { if (ctx?.e?.key === 'Escape') { ctx.e.stopPropagation(); ctx.e.preventDefault(); cancelCreateTag() } }" />
                   </div>
                 </div>
                 <div class="tag-inline-actions">
@@ -208,8 +209,8 @@
                     <template v-if="editingTagId === tag.id">
                       <div class="tag-edit-input" @click.stop>
                         <t-input :ref="setEditingTagInputRefByTag(tag.id)" v-model="editingTagName" size="small"
-                          :maxlength="40" @keydown.enter.stop.prevent="submitEditTag"
-                          @keydown.esc.stop.prevent="cancelEditTag" />
+                          :maxlength="40" @enter="submitEditTag"
+                          @keydown="(_v, ctx) => { if (ctx?.e?.key === 'Escape') { ctx.e.stopPropagation(); ctx.e.preventDefault(); cancelEditTag() } }" />
                       </div>
                     </template>
                     <template v-else>
@@ -268,7 +269,7 @@
           <!-- 搜索栏与管理 FAQ -->
           <div class="faq-search-bar">
             <t-input v-model.trim="entrySearchKeyword" :placeholder="$t('knowledgeEditor.faq.searchPlaceholder')"
-              clearable class="faq-search-input" @clear="loadEntries()" @keydown.enter="loadEntries()">
+              clearable class="faq-search-input" @clear="loadEntries()" @enter="loadEntries()">
               <template #prefix-icon>
                 <t-icon name="search" size="16px" />
               </template>
@@ -529,7 +530,7 @@
               <div class="setting-control">
                 <div class="full-width-input-wrapper">
                   <t-input v-model="similarInput" :placeholder="$t('knowledgeEditor.faq.similarPlaceholder')"
-                    @keydown.enter.prevent="addSimilar" class="full-width-input" />
+                    @enter="addSimilar" class="full-width-input" />
                   <t-button theme="primary" variant="outline"
                     :disabled="!similarInput.trim() || editorForm.similar_questions.length >= 10" @click="addSimilar"
                     class="add-item-btn" size="small">
@@ -557,7 +558,7 @@
               <div class="setting-control">
                 <div class="full-width-input-wrapper">
                   <t-input v-model="negativeInput" :placeholder="$t('knowledgeEditor.faq.negativePlaceholder')"
-                    @keydown.enter.prevent="addNegative" class="full-width-input" />
+                    @enter="addNegative" class="full-width-input" />
                   <t-button theme="primary" variant="outline"
                     :disabled="!negativeInput.trim() || editorForm.negative_questions.length >= 10" @click="addNegative"
                     class="add-item-btn" size="small">
@@ -806,7 +807,7 @@
               </div>
               <div class="setting-control">
                 <t-input v-model="searchForm.query" :placeholder="$t('knowledgeEditor.faq.queryPlaceholder')"
-                  @keydown.enter.prevent="handleSearch" class="full-width-input" />
+                  @enter="handleSearch" class="full-width-input" />
               </div>
             </div>
 
@@ -1272,7 +1273,7 @@ const searchForm = reactive({
 const handleTagListScroll = () => {
   const container = tagListRef.value
   if (!container) return
-  if (tagLoadingMore.value || !tagHasMore.value) return
+  if (tagLoading.value || tagLoadingMore.value || !tagHasMore.value) return
 
   const { scrollTop, scrollHeight, clientHeight } = container
   // 距离底部 50px 时触发加载
@@ -1295,6 +1296,8 @@ const loadTags = async (reset = false) => {
     tagList.value = []
     tagTotal.value = 0
     tagHasMore.value = false
+  } else if (tagLoading.value || tagLoadingMore.value) {
+    return
   }
 
   const currentPage = tagPage.value || 1
@@ -1394,7 +1397,7 @@ const submitCreateTag = async () => {
     await createKnowledgeBaseTag(props.kbId, { name })
     MessagePlugin.success(t('knowledgeBase.tagCreateSuccess'))
     cancelCreateTag()
-    await loadTags()
+    await loadTags(true)
   } catch (error: any) {
     MessagePlugin.error(error?.message || t('common.operationFailed'))
   } finally {
@@ -1436,7 +1439,7 @@ const submitEditTag = async () => {
     await updateKnowledgeBaseTag(props.kbId, editingTagId.value, { name })
     MessagePlugin.success(t('knowledgeBase.tagEditSuccess'))
     cancelEditTag()
-    await loadTags()
+    await loadTags(true)
   } catch (error: any) {
     MessagePlugin.error(error?.message || t('common.operationFailed'))
   } finally {
@@ -1469,7 +1472,7 @@ const confirmDeleteTag = (tag: any) => {
           selectedTagId.value = 0
           handleTagFilterChange(0)
         }
-        await loadTags()
+        await loadTags(true)
         await loadEntries()
         confirmDialog.hide()
       } catch (error: any) {
@@ -1491,7 +1494,7 @@ const handleEntryTagChange = async (entryId: number, value?: string) => {
     await updateFAQEntryTagBatch(props.kbId, { updates: { [entryId]: normalizedValue } })
     MessagePlugin.success(t('knowledgeEditor.messages.updateSuccess'))
     await loadEntries()
-    await loadTags()
+    await loadTags(true)
   } catch (error: any) {
     if (targetEntry) {
       targetEntry.tag_id = previousTagId
@@ -1885,7 +1888,7 @@ const handleBatchTag = async () => {
     batchTagDialogVisible.value = false
     selectedRowKeys.value = []
     await loadEntries()
-    await loadTags()
+    await loadTags(true)
   } catch (error: any) {
     MessagePlugin.error(error?.message || t('common.operationFailed'))
   }
@@ -2176,7 +2179,7 @@ const startPolling = (taskId: string) => {
         if (processed > lastProcessed) {
           lastProcessed = processed
           await loadEntries()
-          await loadTags()
+          await loadTags(true)
         }
 
         // 任务完成或失败，停止轮询（但不自动关闭进度条，让用户手动关闭）
@@ -2193,7 +2196,7 @@ const startPolling = (taskId: string) => {
             entrySearchKeyword.value = ''
             overallFAQTotal.value = 0  // Reset to trigger re-fetch
             await loadEntries()
-            await loadTags()
+            await loadTags(true)
             await loadImportResult() // 加载最新的导入结果统计
             // 任务完成后，3秒后自动关闭进度条
             setTimeout(() => {

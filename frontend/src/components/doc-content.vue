@@ -1,5 +1,5 @@
-// @ts-nocheck
 <script setup lang="ts">
+// @ts-nocheck
 import { marked } from "marked";
 import markedKatex from 'marked-katex-extension';
 import 'katex/dist/katex.min.css';
@@ -11,6 +11,7 @@ import { onMounted, ref, nextTick, onUnmounted, watch, computed } from "vue";
 import { downKnowledgeDetails, deleteGeneratedQuestion, getChunkByIdOnly, previewKnowledgeFile } from "@/api/knowledge-base/index";
 import { MessagePlugin, DialogPlugin } from "tdesign-vue-next";
 import { sanitizeHTML, safeMarkdownToHTML, createSafeImage, isValidImageURL, hydrateProtectedFileImages, isValidURL } from '@/utils/security';
+import { normalizeSpuriousTablePrefixes } from '@/utils/markdownTableNormalize';
 import { openMermaidFullscreen } from '@/utils/mermaidViewer';
 import { useI18n } from 'vue-i18n';
 import { useAuthStore } from '@/stores/auth';
@@ -153,6 +154,7 @@ function onTraceDrawerResizeEnd() {
 
 function onTraceDrawerWindowResize() {
   timelineDrawerWidth.value = clampTraceDrawerWidth(timelineDrawerWidth.value);
+  mainDrawerWidth.value = clampMainDrawerWidth(mainDrawerWidth.value);
 }
 
 function cleanupTraceDrawerResize() {
@@ -161,6 +163,74 @@ function cleanupTraceDrawerResize() {
   document.body.style.cursor = '';
   document.body.style.userSelect = '';
   timelineDrawerResizing.value = false;
+}
+
+// ============== 主抽屉（文档详情）宽度可调 ==============
+const MAIN_DRAWER_WIDTH_KEY = 'weknora-doc-drawer-width';
+const MAIN_DRAWER_DEFAULT_WIDTH = 654;
+const MAIN_DRAWER_MIN_WIDTH = 480;
+
+const mainDrawerWidth = ref(MAIN_DRAWER_DEFAULT_WIDTH);
+const mainDrawerResizing = ref(false);
+
+let mainResizeStartX = 0;
+let mainResizeStartWidth = 0;
+
+function mainDrawerMaxWidth() {
+  return Math.min(1600, Math.max(MAIN_DRAWER_MIN_WIDTH, Math.floor(window.innerWidth * 0.95)));
+}
+
+function clampMainDrawerWidth(width: number) {
+  return Math.max(MAIN_DRAWER_MIN_WIDTH, Math.min(mainDrawerMaxWidth(), width));
+}
+
+function loadMainDrawerWidth() {
+  try {
+    const raw = localStorage.getItem(MAIN_DRAWER_WIDTH_KEY);
+    const parsed = raw ? parseInt(raw, 10) : NaN;
+    if (!Number.isNaN(parsed)) {
+      mainDrawerWidth.value = clampMainDrawerWidth(parsed);
+    }
+  } catch {
+    /* ignore quota / private mode */
+  }
+}
+
+function onMainDrawerResizeStart(e: MouseEvent) {
+  mainDrawerResizing.value = true;
+  mainResizeStartX = e.clientX;
+  mainResizeStartWidth = mainDrawerWidth.value;
+  document.addEventListener('mousemove', onMainDrawerResizeMove);
+  document.addEventListener('mouseup', onMainDrawerResizeEnd);
+  document.body.style.cursor = 'col-resize';
+  document.body.style.userSelect = 'none';
+}
+
+function onMainDrawerResizeMove(e: MouseEvent) {
+  // 抽屉在右侧，向左拖动变宽
+  const delta = mainResizeStartX - e.clientX;
+  mainDrawerWidth.value = clampMainDrawerWidth(mainResizeStartWidth + delta);
+}
+
+function onMainDrawerResizeEnd() {
+  document.removeEventListener('mousemove', onMainDrawerResizeMove);
+  document.removeEventListener('mouseup', onMainDrawerResizeEnd);
+  document.body.style.cursor = '';
+  document.body.style.userSelect = '';
+  mainDrawerResizing.value = false;
+  try {
+    localStorage.setItem(MAIN_DRAWER_WIDTH_KEY, String(mainDrawerWidth.value));
+  } catch {
+    /* ignore */
+  }
+}
+
+function cleanupMainDrawerResize() {
+  document.removeEventListener('mousemove', onMainDrawerResizeMove);
+  document.removeEventListener('mouseup', onMainDrawerResizeEnd);
+  document.body.style.cursor = '';
+  document.body.style.userSelect = '';
+  mainDrawerResizing.value = false;
 }
 
 const traceEntryTheme = computed(() => {
@@ -214,9 +284,15 @@ let page = 1;
 let loadingChunks = false;
 let pendingRequestedPage: number | null = null;
 let pendingChunksBeforeLoad = 0;
-let doc = null;
-let down = ref()
+const CHUNK_PAGE_SIZE = 25;
+/** Scroll container for the main doc drawer (not the first .t-drawer__body on the page). */
+let docScrollEl: HTMLElement | null = null;
 let mdContentWrap = ref()
+// Drawer uses attach="body", so markdown nodes live outside mdContentWrap in the DOM.
+const docMarkdownRoot = ref<HTMLElement | null>(null)
+
+const getMarkdownRenderRoot = (): ParentNode | null =>
+  docMarkdownRoot.value ?? (mdContentWrap.value as ParentNode | null) ?? null
 let url = ref('')
 // 视图模式：chunks / merged / preview
 // file 类型默认「预览」，URL / 手动创建 默认「全文」
@@ -225,9 +301,40 @@ const viewMode = ref<'chunks' | 'merged' | 'preview'>('merged');
 // 合并后的文档内容（在下方通过 computed 定义）
 
 /**
- * 根据 start_at 和 end_at 字段合并有 overlap 的 chunks
- * 返回合并后的完整文档内容
- * 实现逻辑与后端 Go 代码保持一致
+ * 把已合并文本 acc 和下一个 chunk 内容 next 拼接，并去除两者的重叠部分。
+ *
+ * 不再依赖 start_at / end_at 做位置裁剪，而是用「文本重叠匹配」：在 next 的
+ * 开头窗口里找 acc 后缀首次出现的位置，从该位置之后接上。这样能同时兼容：
+ *  1. chunker 给拆分表格补写的表头（零宽 start/end，位置上不可见）——表头出现
+ *     在重叠行之前，会被自然跳过；
+ *  2. HTML 实体编码（&#34; 等）导致的 content 长度与原文区间不一致——比对的是
+ *     文本本身，不受长度偏差影响。
+ *
+ * @param positionOverlap 由 start/end 估算的重叠量，仅用于界定搜索窗口大小。
+ */
+const appendChunkContent = (acc: string, next: string, positionOverlap: number): string => {
+  if (!acc) return next;
+  if (!next) return acc;
+
+  const MIN_OVERLAP = 12;          // 过短的后缀容易误匹配（如分隔行），忽略
+  const span = Math.max(positionOverlap, 0);
+  // 搜索的后缀最大长度；按位置重叠量放大几倍兜底，并设下限
+  const maxK = Math.min(acc.length, next.length, Math.max(span * 3, 400));
+  // 重叠行之前最多允许多少前缀（补写的表头）被跳过
+  const headSlack = Math.max(span * 2, 320);
+
+  for (let k = maxK; k >= MIN_OVERLAP; k--) {
+    const suffix = acc.slice(acc.length - k);
+    const pos = next.indexOf(suffix);
+    if (pos !== -1 && pos <= headSlack) {
+      return acc + next.slice(pos + k);
+    }
+  }
+  return acc + next;
+};
+
+/**
+ * 合并分块内容，还原完整文档。chunks 按 start_at 排序后逐段用文本重叠匹配拼接。
  */
 const mergeChunks = (chunks: any[]): string => {
   if (!chunks || chunks.length === 0) return '';
@@ -239,67 +346,67 @@ const mergeChunks = (chunks: any[]): string => {
     return startA - startB;
   });
 
-  // 初始化合并结果，第一个 chunk 直接加入
-  const mergedChunks: Array<{
-    content: string;
-    start_at: number;
-    end_at: number;
-  }> = [{
-    content: sortedChunks[0].content || '',
-    start_at: sortedChunks[0].start_at ?? 0,
-    end_at: sortedChunks[0].end_at ?? 0
-  }];
+  let merged = sortedChunks[0].content || '';
+  let mergedEnd = sortedChunks[0].end_at ?? 0;
 
-  // 从第二个 chunk 开始遍历
   for (let i = 1; i < sortedChunks.length; i++) {
     const currentChunk = sortedChunks[i];
-    const lastChunk = mergedChunks[mergedChunks.length - 1];
-
     const currentStartAt = currentChunk.start_at ?? 0;
     const currentEndAt = currentChunk.end_at ?? 0;
     const currentContent = currentChunk.content || '';
 
-    // 如果当前 chunk 的起始位置在最后一个 chunk 的结束位置之后，直接添加
-    if (currentStartAt > lastChunk.end_at) {
-      mergedChunks.push({
-        content: currentContent,
-        start_at: currentStartAt,
-        end_at: currentEndAt
-      });
-      continue;
+    if (!currentContent) continue;
+
+    // 与上一段有明显间隙（位置不相邻），用空行分隔后整段拼接
+    if (currentStartAt > mergedEnd && mergedEnd > 0) {
+      merged = merged + '\n\n' + currentContent;
+    } else {
+      const positionOverlap = mergedEnd - currentStartAt;
+      merged = appendChunkContent(merged, currentContent, positionOverlap);
     }
 
-    // 合并重叠的 chunks
-    if (currentEndAt > lastChunk.end_at) {
-      // 将内容转换为字符数组以正确处理多字节字符
-      const contentRunes = Array.from(currentContent);
-      const contentLength = contentRunes.length;
-
-      // 计算偏移量：内容长度 - (当前结束位置 - 上一个结束位置)
-      const offset = contentLength - (currentEndAt - lastChunk.end_at);
-
-      // 拼接非重叠部分
-      const newContent = contentRunes.slice(offset).join('');
-      lastChunk.content = lastChunk.content + newContent;
-      lastChunk.end_at = currentEndAt;
+    if (currentEndAt > mergedEnd) {
+      mergedEnd = currentEndAt;
     }
   }
 
-  // 合并所有段落，用双换行符连接
-  return mergedChunks.map(chunk => chunk.content).join('\n\n');
+  return merged;
+};
+
+const findDocDrawerScrollEl = (): HTMLElement | null =>
+  document.querySelector('.doc-main-drawer .t-drawer__body') as HTMLElement | null;
+
+const unbindDrawerScroll = () => {
+  if (docScrollEl) {
+    docScrollEl.removeEventListener('scroll', handleDetailsScroll);
+    docScrollEl = null;
+  }
+};
+
+const bindDrawerScroll = () => {
+  unbindDrawerScroll();
+  docScrollEl = findDocDrawerScrollEl();
+  if (docScrollEl) {
+    docScrollEl.addEventListener('scroll', handleDetailsScroll, { passive: true });
+  }
 };
 
 onMounted(() => {
   loadTraceDrawerWidth();
+  loadMainDrawerWidth();
   window.addEventListener('resize', onTraceDrawerWindowResize, { passive: true });
-  nextTick(() => {
-    const drawers = document.getElementsByClassName('t-drawer__body');
-    if (drawers && drawers.length > 0) {
-      doc = drawers[0];
-      doc.addEventListener('scroll', handleDetailsScroll);
-    }
-  })
-})
+});
+
+watch(() => props.visible, (visible) => {
+  if (visible) {
+    nextTick(() => {
+      bindDrawerScroll();
+      maybeLoadMoreChunks();
+    });
+  } else {
+    unbindDrawerScroll();
+  }
+});
 watch(() => props.details?.id, () => {
   page = 1;
   loadingChunks = false;
@@ -319,14 +426,16 @@ watch(() => props.details?.chunkLoading, (val) => {
     pendingRequestedPage = null;
     pendingChunksBeforeLoad = 0;
     loadingChunks = false;
+    if (props.visible) {
+      nextTick(() => maybeLoadMoreChunks());
+    }
   }
 });
 onUnmounted(() => {
   window.removeEventListener('resize', onTraceDrawerWindowResize);
   cleanupTraceDrawerResize();
-  if (doc) {
-    doc.removeEventListener('scroll', handleDetailsScroll);
-  }
+  cleanupMainDrawerResize();
+  unbindDrawerScroll();
   if (audioBlobUrl.value) {
     URL.revokeObjectURL(audioBlobUrl.value);
   }
@@ -483,7 +592,10 @@ const loadAudioPreview = async () => {
 };
 const runMarkdownPostRenderPipeline = async () => {
   await nextTick();
-  const renderRoot = mdContentWrap.value as ParentNode;
+  const renderRoot = getMarkdownRenderRoot();
+  if (!renderRoot) {
+    return;
+  }
   await hydrateProtectedFileImages(renderRoot);
   const images = renderRoot?.querySelectorAll?.('img.markdown-image') as NodeListOf<HTMLImageElement> | undefined;
   if (images) {
@@ -498,26 +610,29 @@ const runMarkdownPostRenderPipeline = async () => {
   await renderMermaidDiagrams();
 };
 
-watch(() => props.details.md, (newVal) => {
+watch(() => props.details.md, () => {
   runMarkdownPostRenderPipeline();
-}, { immediate: true, deep: true })
+}, { immediate: true, deep: true, flush: 'post' })
 
 watch(() => viewMode.value, (mode) => {
   if ((mode === 'chunks' || mode === 'merged') && props.visible) {
     runMarkdownPostRenderPipeline();
+    if (mode === 'chunks') {
+      nextTick(() => maybeLoadMoreChunks());
+    }
   }
-});
+}, { flush: 'post' });
 
 watch(() => props.visible, (visible) => {
   if (visible && (viewMode.value === 'chunks' || viewMode.value === 'merged')) {
     runMarkdownPostRenderPipeline();
   }
-});
+}, { flush: 'post' });
 
 // 渲染 Mermaid 图表的函数
 const renderMermaidDiagrams = async () => {
   try {
-    const mermaidElements = mdContentWrap.value?.querySelectorAll('.mermaid');
+    const mermaidElements = getMarkdownRenderRoot()?.querySelectorAll('.mermaid');
     console.log('[Mermaid] Found mermaid elements:', mermaidElements?.length);
     if (mermaidElements && mermaidElements.length > 0) {
       await mermaid.run({
@@ -546,12 +661,13 @@ const handleMermaidClick = (e: Event) => {
 
 // 为 Mermaid 容器绑定点击全屏事件（绑定在 div 上，不是 SVG 上）
 const bindMermaidClickEvents = () => {
-  if (!mdContentWrap.value) {
-    console.log('[Mermaid] mdContentWrap is null');
+  const renderRoot = getMarkdownRenderRoot();
+  if (!renderRoot) {
+    console.log('[Mermaid] markdown render root is null');
     return;
   }
   // 绑定在 .mermaid div 上，而不是 SVG 上
-  const mermaidDivs = mdContentWrap.value.querySelectorAll('.mermaid');
+  const mermaidDivs = renderRoot.querySelectorAll('.mermaid');
   console.log('[Mermaid] Found mermaid divs:', mermaidDivs.length);
   mermaidDivs.forEach((div, index) => {
     const divEl = div as HTMLElement;
@@ -585,6 +701,9 @@ const processMarkdown = (markdownText) => {
   // 处理被 <p> 包裹的表格行，转换为正常的表格行，并在前后补空行
   processedText = processedText.replace(/<p>\s*(\|[\s\S]*?\|)\s*<\/p>/gi, '\n$1\n');
 
+  // MarkItDown 常在表格前插入空行 + 分隔行，渲染会出现多余空行
+  processedText = normalizeSpuriousTablePrefixes(processedText);
+
   // 保留表格单元格中的 <br>，不转成换行，避免打散表格；其他区域原样交给 marked 处理
 
   // 先预处理数学定界符，再做安全预处理
@@ -605,7 +724,8 @@ const processMarkdown = (markdownText) => {
 };
 const handleClose = () => {
   emit("closeDoc", false);
-  if (doc) doc.scrollTop = 0;
+  const scrollEl = docScrollEl || findDocDrawerScrollEl();
+  if (scrollEl) scrollEl.scrollTop = 0;
   viewMode.value = 'merged';
 };
 
@@ -895,25 +1015,54 @@ const downloadFile = () => {
       MessagePlugin.error(t('file.downloadFailed'));
     });
 };
+const requestNextChunkPage = () => {
+  if (loadingChunks || props.details?.chunkLoading) return;
+  const total = props.details?.total ?? 0;
+  const loaded = props.details?.md?.length ?? 0;
+  if (loaded >= total || total === 0) return;
+  const pageNum = Math.ceil(total / CHUNK_PAGE_SIZE);
+  if (page + 1 > pageNum) return;
+  page++;
+  loadingChunks = true;
+  pendingRequestedPage = page;
+  pendingChunksBeforeLoad = loaded;
+  emit('getDoc', page);
+};
+
+/** When the list is shorter than the drawer, scroll never fires — prefetch until scrollable or done. */
+const maybeLoadMoreChunks = () => {
+  if (!props.visible || loadingChunks || props.details?.chunkLoading) return;
+  const el = docScrollEl || findDocDrawerScrollEl();
+  if (!el) return;
+  const loaded = props.details?.md?.length ?? 0;
+  const total = props.details?.total ?? 0;
+  if (loaded >= total) return;
+  const { scrollHeight, clientHeight } = el;
+  if (scrollHeight <= clientHeight + 8) {
+    requestNextChunkPage();
+  }
+};
+
 const handleDetailsScroll = () => {
-  if (doc && !loadingChunks) {
-    let pageNum = Math.ceil(props.details.total / 25);
-    const { scrollTop, scrollHeight, clientHeight } = doc;
-    if (scrollTop + clientHeight >= scrollHeight - 8) {
-      if (props.details.md.length < props.details.total && page + 1 <= pageNum) {
-        page++;
-        loadingChunks = true;
-        pendingRequestedPage = page;
-        pendingChunksBeforeLoad = props.details.md.length;
-        emit("getDoc", page);
-      }
-    }
+  if (loadingChunks || props.details?.chunkLoading) return;
+  const el = docScrollEl || findDocDrawerScrollEl();
+  if (!el) return;
+  const { scrollTop, scrollHeight, clientHeight } = el;
+  if (scrollTop + clientHeight >= scrollHeight - 8) {
+    requestNextChunkPage();
   }
 };
 </script>
 <template>
   <div class="doc_content" ref="mdContentWrap">
-    <t-drawer :visible="visible" :zIndex="2000" size="654px" attach="body" :closeBtn="true" :footer="false"
+    <teleport to="body">
+      <div v-if="visible" class="doc-drawer-resize-handle" :style="{ right: `${mainDrawerWidth}px` }" role="separator"
+        aria-orientation="vertical" @mousedown.prevent="onMainDrawerResizeStart">
+        <div class="doc-drawer-resize-line" />
+      </div>
+    </teleport>
+    <t-drawer :visible="visible" :zIndex="2000" :size="`${mainDrawerWidth}px`" attach="body" :closeBtn="true"
+      :footer="false" :class="['doc-main-drawer', { 'doc-main-drawer--resizing': mainDrawerResizing }]"
       @close="handleClose">
       <template #header>
         <div class="drawer-header">
@@ -921,13 +1070,21 @@ const handleDetailsScroll = () => {
           <t-tag v-if="details.type" class="header-type-tag" size="small" :theme="getTypeTheme()" variant="light">
             {{ getTypeLabel() }}
           </t-tag>
-          <t-button v-if="details.id && hasTimelineSpans" class="trace-entry-btn" size="small" variant="outline"
-            :theme="traceEntryTheme" :title="traceEntryTitle" @click="openTimeline">
-            <template #icon>
-              <t-icon name="chart-bar" size="14px" />
-            </template>
-            {{ $t('knowledgeStages.traceBtn') }}
-          </t-button>
+          <div class="header-actions">
+            <t-button v-if="details.type === 'file' || details.type === 'manual'" class="header-action-btn" size="small"
+              variant="text" shape="square" theme="default" :title="$t('common.download') || 'Download'"
+              @click="downloadFile()">
+              <template #icon>
+                <t-icon name="download" size="16px" />
+              </template>
+            </t-button>
+            <t-button v-if="details.id && hasTimelineSpans" class="header-action-btn trace-entry-btn" size="small"
+              variant="text" shape="square" :theme="traceEntryTheme" :title="traceEntryTitle" @click="openTimeline">
+              <template #icon>
+                <t-icon name="chart-line" size="16px" />
+              </template>
+            </t-button>
+          </div>
         </div>
       </template>
 
@@ -941,35 +1098,27 @@ const handleDetailsScroll = () => {
       </div>
 
       <!-- 二级抽屉：完整 Langfuse-style waterfall -->
+      <teleport to="body">
+        <div v-if="timelineDrawerVisible" class="trace-drawer-resize-handle"
+          :style="{ right: `${timelineDrawerWidth}px` }" role="separator" aria-orientation="vertical"
+          :aria-label="$t('knowledgeStages.resizeDrawer')" :title="$t('knowledgeStages.resizeDrawer')"
+          @mousedown.prevent="onTraceDrawerResizeStart">
+          <div class="trace-drawer-resize-line" />
+        </div>
+      </teleport>
       <t-drawer :visible="timelineDrawerVisible" :zIndex="2100" :size="`${timelineDrawerWidth}px`" attach="body"
         :closeBtn="false" :footer="false" :header="false" :showOverlay="true" :closeOnOverlayClick="true"
         placement="right" :class="['kp-secondary-drawer', { 'kp-secondary-drawer--resizing': timelineDrawerResizing }]"
         @close="closeTimeline">
         <div class="kp-drawer-shell" :class="{ 'kp-drawer-shell--resizing': timelineDrawerResizing }">
-          <div class="kp-drawer-resize-handle" role="separator" aria-orientation="vertical"
-            :aria-label="$t('knowledgeStages.resizeDrawer')" :title="$t('knowledgeStages.resizeDrawer')"
-            @mousedown.prevent="onTraceDrawerResizeStart">
-            <div class="kp-drawer-resize-line" />
-          </div>
           <KnowledgeProcessingTimeline v-if="details.id && timelineDrawerVisible" :knowledge-id="details.id"
             :parse-status="details.parse_status" :doc-title="details.title" show-close @close="closeTimeline" />
         </div>
       </t-drawer>
 
-      <!-- 文件类型专属区域 -->
-      <div v-if="details.type === 'file'" class="doc_box">
-        <a :href="url" style="display: none" ref="down" :download="details.title"></a>
-        <span class="label">{{ $t('knowledgeBase.fileName') }}</span>
-        <div class="download_box">
-          <span class="doc_t">{{ details.title }}</span>
-          <div class="icon_box" @click="downloadFile()" aria-label="Download">
-            <img class="download_box" src="@/assets/img/download.svg" alt="">
-          </div>
-        </div>
-      </div>
-
-      <!-- URL类型专属区域 -->
-      <div v-else-if="details.type === 'url'" class="url_box">
+      <div ref="docMarkdownRoot" class="doc-markdown-root">
+      <!-- URL类型专属区域（保留：source 是真实链接，不与标题重复） -->
+      <div v-if="details.type === 'url'" class="url_box">
         <span class="label">{{ $t('knowledgeBase.urlSource') }}</span>
         <div class="url_link_box">
           <a :href="isValidURL(details.source) ? details.source : 'javascript:void(0)'"
@@ -981,19 +1130,6 @@ const handleDetailsScroll = () => {
         </div>
       </div>
 
-      <!-- 手动创建类型专属区域 -->
-      <div v-else-if="details.type === 'manual'" class="manual_box">
-        <span class="label">{{ $t('knowledgeBase.documentTitle') }}</span>
-        <div class="download_box">
-          <div class="manual_title_box">
-            <span class="manual_title">{{ details.title }}</span>
-          </div>
-          <div class="icon_box" @click="downloadFile()" aria-label="Download">
-            <img class="download_box" src="@/assets/img/download.svg" alt="">
-          </div>
-        </div>
-      </div>
-
       <!-- 文档摘要 -->
       <div v-if="details.description" class="summary_box">
         <span class="label">{{ $t('knowledgeBase.documentSummary') }}</span>
@@ -1001,7 +1137,7 @@ const handleDetailsScroll = () => {
           @click="(summaryOverflow || summaryExpanded) && (summaryExpanded = !summaryExpanded)">
           <div ref="summaryRef" :class="['summary_content', { 'summary_collapsed': !summaryExpanded }]">{{
             details.description
-          }}</div>
+            }}</div>
           <div v-if="(summaryOverflow && !summaryExpanded) || summaryExpanded" class="summary_fade"
             :class="{ 'summary_fade_expanded': summaryExpanded }">
             <t-icon :name="summaryExpanded ? 'chevron-up' : 'chevron-down'" size="14px" class="summary_fade_icon" />
@@ -1132,6 +1268,7 @@ const handleDetailsScroll = () => {
         <DocumentPreview :knowledgeId="details.id" :fileType="details.file_type" :fileName="details.title"
           :active="viewMode === 'preview'" />
       </div>
+      </div>
 
     </t-drawer>
   </div>
@@ -1198,9 +1335,15 @@ const handleDetailsScroll = () => {
   align-items: center;
   gap: 8px;
   min-width: 0;
+  width: 100%;
+  /* TDesign 抽屉的 X 关闭按钮浮在 header 右上角（约 16px 宽 + 16px 间距），
+     给右侧留出空间，避免我们的图标按钮被 X 遮挡。 */
+  padding-right: 32px;
 
   .header-title {
-    flex: 1;
+    /* flex: 1 1 auto + min-width:0 让标题在标题超长时收缩出省略号，
+       而不是把右侧 tag/操作按钮挤出 header。 */
+    flex: 1 1 auto;
     min-width: 0;
     font-size: 16px;
     font-weight: 500;
@@ -1209,22 +1352,52 @@ const handleDetailsScroll = () => {
     white-space: nowrap;
   }
 
-  .header-type-tag,
-  .trace-entry-btn {
+  .header-type-tag {
     flex-shrink: 0;
+  }
+
+  .header-actions {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    /* 关键：操作区永不收缩，标题再长也能完整看到图标 */
+    flex-shrink: 0;
+    flex-grow: 0;
+  }
+
+  .header-action-btn {
+    /* 28×28 文本按钮：无边框，与抽屉头部融为一体；hover 时浅灰背景，
+       与右上角 X 关闭按钮的视觉风格一致。 */
+    width: 28px;
+    min-width: 28px;
+    height: 28px;
+    padding: 0;
+    flex-shrink: 0;
+    color: var(--td-text-color-secondary);
+    border-radius: 4px;
+    transition: background-color 0.15s ease, color 0.15s ease;
+
+    &:hover {
+      background: var(--td-bg-color-container-hover);
+      color: var(--td-text-color-primary);
+    }
+
+    :deep(.t-button__text) {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
   }
 }
 
-// 信息面板通用样式
+// 信息面板通用样式（仅 url_box 在用，file/manual 已合并到 header）
 .info_panel {
   display: flex;
   flex-direction: column;
   margin-bottom: 16px;
 }
 
-.doc_box,
-.url_box,
-.manual_box {
+.url_box {
   .info_panel();
 }
 
@@ -1253,39 +1426,6 @@ const handleDetailsScroll = () => {
      declaration in a flex chain, clip rather than overflow the drawer. */
   overflow: hidden;
   min-width: 0;
-}
-
-.kp-drawer-resize-handle {
-  position: absolute;
-  top: 0;
-  left: -6px;
-  bottom: 0;
-  width: 12px;
-  cursor: col-resize;
-  z-index: 20;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-
-  &:hover .kp-drawer-resize-line,
-  .kp-drawer-shell--resizing & .kp-drawer-resize-line {
-    opacity: 1;
-    background: var(--td-brand-color);
-  }
-}
-
-.kp-drawer-resize-line {
-  width: 2px;
-  height: 48px;
-  border-radius: 1px;
-  background: var(--td-component-border);
-  opacity: 0.55;
-  transition: opacity 0.15s ease, background 0.15s ease;
-}
-
-.kp-drawer-shell--resizing .kp-drawer-resize-line {
-  opacity: 1;
-  background: var(--td-brand-color);
 }
 
 .kp-drawer-shell> :deep(.kp-timeline) {
@@ -1385,38 +1525,6 @@ const handleDetailsScroll = () => {
   margin-bottom: 8px;
 }
 
-// 文件下载区域
-.download_box {
-  display: flex;
-  align-items: center;
-  background: var(--td-bg-color-container-hover);
-  border-radius: 4px;
-  padding: 6px 10px;
-}
-
-.doc_t {
-  display: flex;
-  align-items: center;
-  word-break: break-all;
-  font-size: 13px;
-  color: var(--td-text-color-primary);
-  flex: 1;
-}
-
-.icon_box {
-  margin-left: 12px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--td-brand-color);
-  cursor: pointer;
-
-  img.download_box {
-    width: 16px;
-    height: 16px;
-  }
-}
-
 // URL链接区域
 .url_link_box {
   border-radius: 4px;
@@ -1440,19 +1548,6 @@ const handleDetailsScroll = () => {
       flex-shrink: 0;
       color: var(--td-brand-color);
     }
-  }
-}
-
-// 手动创建标题区域
-.manual_title_box {
-  flex: 1;
-  display: flex;
-  align-items: center;
-
-  .manual_title {
-    color: var(--td-text-color-primary);
-    font-size: 13px;
-    word-break: break-word;
   }
 }
 
@@ -1720,6 +1815,75 @@ const handleDetailsScroll = () => {
      content background need to be flushed for the timeline to fill
      edge-to-edge. -->
 <style lang="less">
+/* 主抽屉宽度可调：拖拽手柄通过 teleport 挂到 body，不受 scoped 影响，
+   故样式写在非 scoped 块里。手柄贴在抽屉面板左缘（right = 抽屉宽度）。 */
+.doc-drawer-resize-handle {
+  position: fixed;
+  top: 0;
+  bottom: 0;
+  width: 12px;
+  margin-left: -6px;
+  cursor: col-resize;
+  z-index: 2001;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.doc-drawer-resize-handle .doc-drawer-resize-line {
+  width: 2px;
+  height: 48px;
+  border-radius: 1px;
+  background: var(--td-component-border);
+  opacity: 0.55;
+  transition: opacity 0.15s ease, background 0.15s ease;
+}
+
+.doc-drawer-resize-handle:hover .doc-drawer-resize-line {
+  opacity: 1;
+  background: var(--td-brand-color);
+}
+
+/* 拖拽过程中关闭宽度过渡，避免跟手卡顿 */
+.t-drawer.doc-main-drawer--resizing .t-drawer__content {
+  transition: none !important;
+}
+
+/* Trace 二级抽屉拖拽手柄：与主抽屉保持一致，teleport 到 body，
+   position: fixed，z-index 高于二级抽屉本体，避免被其他层级遮挡。 */
+.trace-drawer-resize-handle {
+  position: fixed;
+  top: 0;
+  bottom: 0;
+  width: 12px;
+  margin-left: -6px;
+  cursor: col-resize;
+  z-index: 2101;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.trace-drawer-resize-handle .trace-drawer-resize-line {
+  width: 2px;
+  height: 48px;
+  border-radius: 1px;
+  background: var(--td-component-border);
+  opacity: 0.55;
+  transition: opacity 0.15s ease, background 0.15s ease;
+}
+
+.trace-drawer-resize-handle:hover .trace-drawer-resize-line {
+  opacity: 1;
+  background: var(--td-brand-color);
+}
+
+.t-drawer.kp-secondary-drawer--resizing .trace-drawer-resize-line,
+body:has(.t-drawer.kp-secondary-drawer--resizing) .trace-drawer-resize-line {
+  opacity: 1;
+  background: var(--td-brand-color);
+}
+
 .t-drawer.kp-secondary-drawer .t-drawer__body {
   padding: 0 !important;
 }

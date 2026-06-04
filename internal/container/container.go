@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -40,6 +41,7 @@ import (
 	elasticsearchRepoV8 "github.com/Tencent/WeKnora/internal/application/repository/retriever/elasticsearch/v8"
 	milvusRepo "github.com/Tencent/WeKnora/internal/application/repository/retriever/milvus"
 	neo4jRepo "github.com/Tencent/WeKnora/internal/application/repository/retriever/neo4j"
+	openSearchRepo "github.com/Tencent/WeKnora/internal/application/repository/retriever/opensearch"
 	postgresRepo "github.com/Tencent/WeKnora/internal/application/repository/retriever/postgres"
 	qdrantRepo "github.com/Tencent/WeKnora/internal/application/repository/retriever/qdrant"
 	sqliteRetrieverRepo "github.com/Tencent/WeKnora/internal/application/repository/retriever/sqlite"
@@ -71,6 +73,7 @@ import (
 	infra_web_search "github.com/Tencent/WeKnora/internal/infrastructure/web_search"
 	"github.com/Tencent/WeKnora/internal/logger"
 	"github.com/Tencent/WeKnora/internal/mcp"
+	"github.com/Tencent/WeKnora/internal/models/chat"
 	"github.com/Tencent/WeKnora/internal/models/embedding"
 	"github.com/Tencent/WeKnora/internal/models/utils/ollama"
 	"github.com/Tencent/WeKnora/internal/router"
@@ -79,6 +82,7 @@ import (
 	"github.com/Tencent/WeKnora/internal/tracing/langfuse"
 	"github.com/Tencent/WeKnora/internal/types"
 	"github.com/Tencent/WeKnora/internal/types/interfaces"
+	secutils "github.com/Tencent/WeKnora/internal/utils"
 	"github.com/tencent/vectordatabase-sdk-go/tcvectordb"
 	"github.com/weaviate/weaviate-go-client/v5/weaviate"
 	"github.com/weaviate/weaviate-go-client/v5/weaviate/auth"
@@ -348,6 +352,11 @@ func BuildContainer(container *dig.Container) *dig.Container {
 	must(container.Provide(handler.NewWeKnoraCloudHandler))
 	logger.Debugf(ctx, "[Container] HTTP handlers registered")
 
+	// Wire the chat package's local image resolver so multimodal chat can read
+	// local:// images that live under a tenant's configured storage PathPrefix
+	// (which is not encoded in the local:// URL).
+	must(container.Invoke(registerChatLocalImageResolver))
+
 	// Router configuration
 	logger.Debugf(ctx, "[Container] Registering router and starting task server...")
 	must(container.Provide(router.NewRouter))
@@ -359,6 +368,41 @@ func BuildContainer(container *dig.Container) *dig.Container {
 
 	logger.Infof(ctx, "[Container] Container initialization completed successfully")
 	return container
+}
+
+// registerChatLocalImageResolver wires the chat package's LocalImageResolver
+// hook. Stored local:// URLs are relative to the resolved storage base dir and
+// do NOT encode the owning tenant's configured PathPrefix, so resolving them to
+// disk bytes requires rebuilding the FileService from that tenant's storage
+// config. The owning tenant is parsed from the URL's first path segment, which
+// correctly handles cross-tenant shared resources (e.g. shared KB images).
+func registerChatLocalImageResolver(tenantRepo interfaces.TenantRepository) {
+	chat.LocalImageResolver = func(storageURL string) ([]byte, bool) {
+		tenantID := secutils.ParseTenantIDFromStoragePath(storageURL)
+		if tenantID == 0 {
+			return nil, false
+		}
+		ctx := context.Background()
+		tenant, err := tenantRepo.GetTenantByID(ctx, tenantID)
+		if err != nil || tenant == nil {
+			return nil, false
+		}
+		baseDir := strings.TrimSpace(os.Getenv("LOCAL_STORAGE_BASE_DIR"))
+		fileSvc, _, err := file.NewFileServiceFromStorageConfig("local", tenant.StorageEngineConfig, baseDir)
+		if err != nil {
+			return nil, false
+		}
+		rc, err := fileSvc.GetFile(ctx, storageURL)
+		if err != nil {
+			return nil, false
+		}
+		defer rc.Close()
+		data, err := io.ReadAll(rc)
+		if err != nil {
+			return nil, false
+		}
+		return data, true
+	}
 }
 
 // must is a helper function for error handling
@@ -636,110 +680,6 @@ func syncSequences(db *gorm.DB) {
 	}
 }
 
-// resetPendingTasks resets the state of any knowledge items or sync logs stuck in processing
-// due to an unexpected application restart.
-//
-// In Lite mode (no REDIS_ADDR) every queued task lived in process memory, so
-// any "processing" row at startup is definitively orphaned and must be marked
-// failed wholesale. In distributed mode (Asynq on Redis) the active queue
-// survives restart, but the *currently executing* task on the dead instance
-// is lost — Asynq won't reschedule it until at-least-once retry kicks in,
-// which can take minutes or never (e.g. if the deadline has passed). To bound
-// the worst case we mark only "long-stale" rows failed: anything that hasn't
-// been touched for 30 minutes is well past any reasonable in-flight window.
-// Newer rows are left alone so we don't race a peer instance that's mid-process.
-func resetPendingTasks(db *gorm.DB) {
-	distributed := os.Getenv("REDIS_ADDR") != ""
-	ctx := context.Background()
-	spanRepo := repository.NewKnowledgeSpanRepository(db)
-
-	knowledgeQuery := db.Model(&types.Knowledge{}).
-		Where("parse_status IN ?", []string{
-			types.ParseStatusPending,
-			types.ParseStatusProcessing,
-			types.ParseStatusFinalizing,
-			types.ParseStatusDeleting,
-		})
-	summaryQuery := db.Model(&types.Knowledge{}).
-		Where("summary_status IN ?", []string{types.SummaryStatusPending, types.SummaryStatusProcessing})
-	syncQuery := db.Model(&types.SyncLog{}).
-		Where("status IN ?", []string{types.SyncLogStatusRunning, "pending"})
-
-	if distributed {
-		// 30-minute stale threshold — comfortably longer than any individual
-		// stage's expected duration (DocReader 30m, embedding seconds, etc.)
-		// while short enough that operators don't wait hours after a crash.
-		staleCutoff := time.Now().Add(-30 * time.Minute)
-		knowledgeQuery = knowledgeQuery.Where("updated_at < ?", staleCutoff)
-		summaryQuery = summaryQuery.Where("updated_at < ?", staleCutoff)
-		syncQuery = syncQuery.Where("started_at < ?", staleCutoff)
-	}
-
-	// Cancel orphaned trace spans for knowledge rows we are about to mark
-	// failed. resetPendingTasks does not touch asynq queues; this only
-	// prevents the UI from showing duplicate running postprocess.*
-	// subspans when a later retry also opens fresh spans.
-	var stuckKnowledge []types.Knowledge
-	if err := knowledgeQuery.Session(&gorm.Session{}).Select("id").Find(&stuckKnowledge).Error; err != nil {
-		logger.Warnf(ctx, "resetPendingTasks: list stuck knowledge failed: %v", err)
-	} else {
-		for _, k := range stuckKnowledge {
-			attempt, err := spanRepo.LatestAttempt(ctx, k.ID)
-			if err != nil || attempt <= 0 {
-				continue
-			}
-			if n, err := spanRepo.CancelAllOpenSpans(ctx, k.ID, attempt,
-				"SERVER_RESTART", "task interrupted due to application restart"); err != nil {
-				logger.Warnf(ctx, "resetPendingTasks: cancel spans for %s failed: %v", k.ID, err)
-			} else if n > 0 {
-				logger.Infof(ctx, "resetPendingTasks: cancelled %d open span(s) for knowledge %s attempt %d",
-					n, k.ID, attempt)
-			}
-		}
-	}
-
-	// 1. Reset knowledge parsing tasks (including finalizing rows whose
-	// enrichment subtasks were lost with the process).
-	result := knowledgeQuery.Session(&gorm.Session{}).Updates(map[string]interface{}{
-		"parse_status":           types.ParseStatusFailed,
-		"error_message":          "Task interrupted due to application restart",
-		"pending_subtasks_count": 0,
-	})
-	if result.Error != nil {
-		logger.Warnf(context.Background(), "Failed to reset pending knowledge tasks: %v", result.Error)
-	} else if result.RowsAffected > 0 {
-		logger.Infof(context.Background(),
-			"Reset %d stuck knowledge parsing tasks to failed state (distributed=%v)",
-			result.RowsAffected, distributed)
-	}
-
-	// 2. Reset knowledge summary tasks
-	resultSummary := summaryQuery.Session(&gorm.Session{}).Updates(map[string]interface{}{
-		"summary_status": types.SummaryStatusFailed,
-	})
-	if resultSummary.Error != nil {
-		logger.Warnf(context.Background(), "Failed to reset pending summary tasks: %v", resultSummary.Error)
-	} else if resultSummary.RowsAffected > 0 {
-		logger.Infof(context.Background(),
-			"Reset %d stuck summary generation tasks to failed state (distributed=%v)",
-			resultSummary.RowsAffected, distributed)
-	}
-
-	// 3. Reset data source sync tasks
-	resultSync := syncQuery.Session(&gorm.Session{}).Updates(map[string]interface{}{
-		"status":        types.SyncLogStatusFailed,
-		"error_message": "Sync interrupted due to application restart",
-		"finished_at":   time.Now(),
-	})
-	if resultSync.Error != nil {
-		logger.Warnf(context.Background(), "Failed to reset pending data source sync tasks: %v", resultSync.Error)
-	} else if resultSync.RowsAffected > 0 {
-		logger.Infof(context.Background(),
-			"Reset %d stuck data source sync tasks to failed state (distributed=%v)",
-			resultSync.RowsAffected, distributed)
-	}
-}
-
 // initFileService initializes file storage service
 // Creates the appropriate file storage service based on configuration
 // Supports multiple storage backends (MinIO, COS, local filesystem)
@@ -890,10 +830,16 @@ func initFileService(cfg *config.Config) (interfaces.FileService, error) {
 // Returns:
 //   - Configured retrieval engine registry
 //   - Error if initialization fails
-func initRetrieveEngineRegistry(db *gorm.DB, cfg *config.Config) (interfaces.RetrieveEngineRegistry, error) {
+func initRetrieveEngineRegistry(
+	db *gorm.DB, cfg *config.Config, auditSvc interfaces.AuditLogService,
+) (interfaces.RetrieveEngineRegistry, error) {
 	registry := retriever.NewRetrieveEngineRegistry()
 	retrieveDriver := strings.Split(os.Getenv("RETRIEVE_DRIVER"), ",")
 	log := logger.GetLogger(context.Background())
+	// Audit sink for OpenSearch driver events (index created / reindex). Driver
+	// events fire under a tenant-scoped ctx at indexing time; the env-path
+	// registration ctx below has no tenant, so those emits self-skip.
+	auditSink := newAuditSinkAdapter(auditSvc)
 
 	if slices.Contains(retrieveDriver, "postgres") {
 		postgresRepo := postgresRepo.NewPostgresRetrieveEngineRepository(db)
@@ -956,6 +902,29 @@ func initRetrieveEngineRegistry(db *gorm.DB, cfg *config.Config) (interfaces.Ret
 			} else {
 				log.Infof("Register elasticsearch_v7 retrieve engine success")
 			}
+		}
+	}
+
+	if slices.Contains(retrieveDriver, "opensearch") {
+		cc := &types.ConnectionConfig{
+			Addr:               os.Getenv("OPENSEARCH_ADDR"),
+			Username:           os.Getenv("OPENSEARCH_USERNAME"),
+			Password:           os.Getenv("OPENSEARCH_PASSWORD"),
+			InsecureSkipVerify: strings.EqualFold(os.Getenv("OPENSEARCH_INSECURE_SKIP_VERIFY"), "true"),
+		}
+		client, err := openSearchRepo.NewOpenSearchClient(cc)
+		if err != nil {
+			log.Errorf("Create opensearch client failed: %v", err)
+		} else if repo, err := openSearchRepo.NewRepository(
+			context.Background(), client, "", nil, openSearchRepo.WithAuditSink(auditSink),
+		); err != nil {
+			log.Errorf("Create opensearch repository failed: %v", err)
+		} else if err := registry.Register(
+			retriever.NewKVHybridRetrieveEngine(repo, types.OpenSearchRetrieverEngineType),
+		); err != nil {
+			log.Errorf("Register opensearch retrieve engine failed: %v", err)
+		} else {
+			log.Infof("Register opensearch retrieve engine success")
 		}
 	}
 
@@ -1166,7 +1135,7 @@ func initRetrieveEngineRegistry(db *gorm.DB, cfg *config.Config) (interfaces.Ret
 	}
 	// ─── DB store registration (byStoreID) ───
 	if storeReg, ok := registry.(*retriever.RetrieveEngineRegistry); ok {
-		loadDBStoresIntoRegistry(storeReg, db, cfg)
+		loadDBStoresIntoRegistry(storeReg, db, cfg, auditSink)
 	}
 
 	return registry, nil
@@ -1174,7 +1143,9 @@ func initRetrieveEngineRegistry(db *gorm.DB, cfg *config.Config) (interfaces.Ret
 
 // loadDBStoresIntoRegistry loads VectorStore records from DB and registers them
 // in the registry's byStoreID map. Failures are logged and skipped (non-fatal).
-func loadDBStoresIntoRegistry(storeRegistry interfaces.StoreRegistry, db *gorm.DB, cfg *config.Config) {
+func loadDBStoresIntoRegistry(
+	storeRegistry interfaces.StoreRegistry, db *gorm.DB, cfg *config.Config, auditSink openSearchRepo.AuditSink,
+) {
 	ctx := context.Background()
 	log := logger.GetLogger(ctx)
 
@@ -1191,7 +1162,7 @@ func loadDBStoresIntoRegistry(storeRegistry interfaces.StoreRegistry, db *gorm.D
 
 	log.Infof("Loading %d vector store(s) from database", len(stores))
 	for _, store := range stores {
-		svc, err := createEngineServiceFromStore(ctx, store, db, cfg)
+		svc, err := createEngineServiceFromStore(ctx, store, db, cfg, auditSink)
 		if err != nil {
 			log.Errorf("Failed to create engine for store %s (%s): %v", store.ID, store.Name, err)
 			continue

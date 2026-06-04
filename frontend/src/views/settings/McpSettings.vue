@@ -42,8 +42,15 @@
           class="service-card"
           :class="[
             `service-card--${service.transport_type || 'unknown'}`,
-            { 'service-card--builtin': service.is_builtin }
+            {
+              'service-card--builtin': service.is_builtin,
+              'service-card--clickable': isServiceCardClickable(),
+            },
           ]"
+          :role="isServiceCardClickable() ? 'button' : undefined"
+          :tabindex="isServiceCardClickable() ? 0 : undefined"
+          @click="onServiceCardClick($event, service)"
+          @keydown.enter="onServiceCardClick($event, service)"
         >
           <div class="service-card__badge" :aria-label="getTransportTypeLabel(service.transport_type)">
             <t-icon :name="getTransportTypeIcon(service.transport_type)" size="18px" />
@@ -66,17 +73,23 @@
                 <span class="service-card__status-dot" />
                 {{ service.enabled ? $t('common.on') : $t('common.off') }}
               </span>
-              <t-dropdown
-                :options="service.is_builtin ? getBuiltinServiceOptions() : getServiceOptions(service)"
-                placement="bottom-right"
-                attach="body"
-                trigger="click"
-                @click="(data: any) => handleMenuAction({ value: data.value }, service)"
+              <div
+                v-if="(service.is_builtin ? getBuiltinServiceOptions() : getServiceOptions(service)).length > 0"
+                class="service-card__actions"
+                @click.stop
               >
-                <t-button variant="text" shape="square" size="small" class="service-card__more">
-                  <t-icon name="ellipsis" />
-                </t-button>
-              </t-dropdown>
+                <t-dropdown
+                  :options="service.is_builtin ? getBuiltinServiceOptions() : getServiceOptions(service)"
+                  placement="bottom-right"
+                  attach="body"
+                  trigger="click"
+                  @click="(data: any) => handleMenuAction({ value: data.value }, service)"
+                >
+                  <t-button variant="text" shape="square" size="small" class="service-card__more">
+                    <t-icon name="ellipsis" />
+                  </t-button>
+                </t-dropdown>
+              </div>
             </div>
             <div class="service-card__subtitle">
               <span class="service-card__type">{{ getTransportTypeLabel(service.transport_type) }}</span>
@@ -99,6 +112,7 @@
       :service="currentService"
       :mode="dialogMode"
       @success="handleDialogSuccess"
+      @test="handleDrawerTest"
     />
 
     <!-- Test Result Dialog -->
@@ -119,7 +133,6 @@ import {
   listMCPServices,
   updateMCPService,
   deleteMCPService,
-  testMCPService,
   type MCPService,
   type MCPTestResult
 } from '@/api/mcp-service'
@@ -141,7 +154,6 @@ const testDialogVisible = ref(false)
 const testResult = ref<MCPTestResult | null>(null)
 const testingServiceName = ref('')
 const testingServiceId = ref('')
-const testing = ref(false)
 
 // Load MCP services
 const loadServices = async () => {
@@ -161,6 +173,20 @@ const handleAdd = () => {
   currentService.value = null
   dialogMode.value = 'add'
   dialogVisible.value = true
+}
+
+const isServiceCardClickable = () => authStore.hasRole('admin')
+
+const onServiceCardClick = (event: Event, service: MCPService) => {
+  if (!isServiceCardClickable()) return
+  if (event.type === 'keydown') {
+    const ke = event as KeyboardEvent
+    if (ke.key !== 'Enter' && ke.key !== ' ') return
+    ke.preventDefault()
+  }
+  const target = event.target as HTMLElement | null
+  if (target?.closest('.service-card__actions')) return
+  handleEdit(service)
 }
 
 // Handle edit button click
@@ -191,52 +217,6 @@ const handleToggleEnabled = async (service: MCPService) => {
   }
 }
 
-// Handle test button click
-const handleTest = async (service: MCPService) => {
-  if (!service || !service.id) return
-
-  testingServiceName.value = service.name
-  testingServiceId.value = service.id
-  testing.value = true
-
-  MessagePlugin.info({
-    content: t('mcpSettings.toasts.testing', { name: service.name }),
-    duration: 0,
-    closeBtn: false
-  })
-
-  try {
-    const result = await testMCPService(service.id)
-
-    MessagePlugin.closeAll()
-
-    if (!result) {
-      testResult.value = {
-        success: false,
-        message: t('mcpSettings.toasts.noResponse')
-      }
-      testDialogVisible.value = true
-      return
-    }
-
-    testResult.value = result
-    testDialogVisible.value = true
-  } catch (error: any) {
-    MessagePlugin.closeAll()
-
-    const errorMessage = error?.response?.data?.error?.message || error?.message || t('mcpSettings.toasts.testFailed')
-    console.error('Failed to test MCP service:', error)
-
-    testResult.value = {
-      success: false,
-      message: errorMessage
-    }
-    testDialogVisible.value = true
-  } finally {
-    testing.value = false
-  }
-}
-
 // Handle delete button click
 const handleDelete = (service: MCPService) => {
   if (!service || !service.id) return
@@ -256,9 +236,10 @@ const handleDelete = (service: MCPService) => {
   })
 }
 
-// Get service options for dropdown menu. MCP service mutations and the
-// /test endpoint (which probes external infra with stored creds) are all
+// Get service options for dropdown menu. MCP service mutations are all
 // Admin+ in the backend matrix, so non-Admins see an empty action menu.
+// 测试连接已挪到编辑抽屉的 footer，不再放在外层菜单里 — 单一入口减少
+// 用户疑惑（"为什么有两个测试入口，结果一样吗？"）。
 const getServiceOptions = (service: MCPService) => {
   if (!authStore.hasRole('admin')) {
     return []
@@ -268,35 +249,41 @@ const getServiceOptions = (service: MCPService) => {
       content: service.enabled ? t('common.off') : t('common.on'),
       value: 'toggle',
     },
-    { content: t('mcpSettings.actions.test'), value: 'test' },
     { content: t('common.edit'), value: 'edit' },
     { content: t('common.delete'), value: 'delete', theme: 'error' as const }
   ]
 }
 
-// Builtin: 仅测试 (Admin+ only as well — testing a builtin still hits
-// the same /test endpoint that requires Admin+ role).
+// Builtin: 仅编辑（同样 Admin+ only）。内置服务测试也通过抽屉的 footer 触发，
+// 不再在外层菜单露出"测试连接"项。
 const getBuiltinServiceOptions = () => {
   if (!authStore.hasRole('admin')) {
     return []
   }
   return [
-    { content: t('mcpSettings.actions.test'), value: 'test' }
+    { content: t('common.edit'), value: 'edit' }
   ]
 }
 
-// Handle menu action
+// Drawer 内点击"测试连接"后，复用现有的 testResult dialog 展示结果。
+// 抽屉只负责调 API + 拿结果，弹窗位置/状态由父组件统一管。
+const handleDrawerTest = ({ service, result }: { service: MCPService; result: MCPTestResult }) => {
+  testingServiceName.value = service.name
+  testingServiceId.value = service.id
+  testResult.value = result
+  testDialogVisible.value = true
+}
+
+// Handle menu action. 'test' has been removed from the menu — testing now
+// lives only in the editor drawer. We keep the switch's case list narrow
+// so a stray 'test' from somewhere else falls through harmlessly.
 const handleMenuAction = (data: { value: string }, service: MCPService) => {
-  if (testing.value) return
   switch (data.value) {
     case 'toggle':
       // Flip the local model and reuse the toggle path so the API call,
       // optimistic UI, and rollback-on-failure all stay in one place.
       service.enabled = !service.enabled
       handleToggleEnabled(service)
-      break
-    case 'test':
-      handleTest(service)
       break
     case 'edit':
       handleEdit(service)
@@ -424,19 +411,32 @@ onMounted(() => {
   transition: border-color 0.18s ease, box-shadow 0.18s ease;
   min-width: 0;
 
-  &:hover {
-    border-color: var(--td-brand-color-3, var(--td-brand-color));
-    box-shadow: 0 4px 14px rgba(15, 23, 42, 0.06);
-  }
-
   &--builtin {
     background: var(--td-bg-color-secondarycontainer);
+  }
+
+  &--clickable {
+    cursor: pointer;
 
     &:hover {
-      box-shadow: none;
-      border-color: var(--td-component-stroke);
+      border-color: var(--td-brand-color-3, var(--td-brand-color));
+      box-shadow: 0 4px 14px rgba(15, 23, 42, 0.06);
+    }
+
+    &:focus-visible {
+      outline: 2px solid var(--td-brand-color);
+      outline-offset: 2px;
     }
   }
+
+  &--builtin:not(.service-card--clickable):hover {
+    box-shadow: none;
+    border-color: var(--td-component-stroke);
+  }
+}
+
+.service-card__actions {
+  flex-shrink: 0;
 }
 
 .service-card__badge {
@@ -561,7 +561,8 @@ onMounted(() => {
 
 // switch 始终显示（它是状态锚点）；三点按钮只在 hover/focus 时出现。
 .service-card:hover .service-card__more,
-.service-card:focus-within .service-card__more {
+.service-card:focus-within .service-card__more,
+.service-card__actions:focus-within .service-card__more {
   opacity: 1;
 }
 

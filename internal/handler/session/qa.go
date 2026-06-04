@@ -423,6 +423,17 @@ func (h *Handler) setupSSEStream(reqCtx *qaRequestContext, generateTitle bool) *
 	// Setup stop event handler
 	h.setupStopEventHandler(eventBus, reqCtx.sessionID, reqCtx.session.TenantID, reqCtx.assistantMessage, cancel)
 
+	// Watch for stop events independently of the client SSE connection so a
+	// user-requested stop reliably cancels generation even when the client
+	// has already disconnected (e.g. API-Key callers that close the stream
+	// before POSTing /stop). The watcher self-terminates on a terminal stream
+	// event, so its lifetime is decoupled from when the QA service call
+	// returns (KnowledgeQA returns immediately while streaming continues in a
+	// background goroutine, whereas AgentQA blocks until done). Use a
+	// connection-independent context derived from baseCtx so it survives the
+	// client disconnect.
+	h.startStopWatcher(logger.CloneContext(baseCtx), reqCtx.sessionID, reqCtx.assistantMessage.ID, eventBus)
+
 	// Setup stream handler
 	h.setupStreamHandler(asyncCtx, reqCtx.sessionID, reqCtx.assistantMessage.ID,
 		reqCtx.requestID, reqCtx.receivedAt, reqCtx.assistantMessage, eventBus)
@@ -764,16 +775,24 @@ func (h *Handler) executeQA(reqCtx *qaRequestContext, mode qaMode, generateTitle
 		}
 
 		if serviceErr != nil {
-			logger.ErrorWithFields(streamCtx.asyncCtx, serviceErr, nil)
-			streamCtx.eventBus.Emit(streamCtx.asyncCtx, event.Event{
-				Type:      event.EventError,
-				SessionID: sessionID,
-				Data: event.ErrorData{
-					Error:     serviceErr.Error(),
-					Stage:     stageName,
+			// A user-requested stop cancels asyncCtx, which surfaces here as a
+			// context cancellation. That is an expected outcome, not a failure:
+			// the stop event already notifies the client, so don't emit a
+			// spurious error event (which would otherwise show an error toast).
+			if streamCtx.asyncCtx.Err() != nil {
+				logger.Infof(streamCtx.asyncCtx, "QA cancelled by user stop for session: %s", sessionID)
+			} else {
+				logger.ErrorWithFields(streamCtx.asyncCtx, serviceErr, nil)
+				streamCtx.eventBus.Emit(streamCtx.asyncCtx, event.Event{
+					Type:      event.EventError,
 					SessionID: sessionID,
-				},
-			})
+					Data: event.ErrorData{
+						Error:     serviceErr.Error(),
+						Stage:     stageName,
+						SessionID: sessionID,
+					},
+				})
+			}
 		}
 	}()
 

@@ -1,6 +1,6 @@
 // src/utils/request.js
 import axios from "axios";
-import { generateRandomString } from "./index";
+import { generateRandomString, MAX_FILE_SIZE_MB } from "./index";
 import i18n from '@/i18n'
 import { getApiBaseUrl } from './api-base';
 
@@ -185,7 +185,7 @@ instance.interceptors.response.use(
     if (error.response.status === 413) {
       return Promise.reject({ 
         status: 413, 
-        message: t('error.fileSizeExceeded'),
+        message: i18n.global.t('error.fileSizeExceeded', { size: MAX_FILE_SIZE_MB }),
         success: false
       });
     }
@@ -214,8 +214,8 @@ instance.interceptors.response.use(
   }
 );
 
-export function get(url: string) {
-  return instance.get(url);
+export function get(url: string, config?: any) {
+  return instance.get(url, config);
 }
 
 export async function getDown(url: string) {
