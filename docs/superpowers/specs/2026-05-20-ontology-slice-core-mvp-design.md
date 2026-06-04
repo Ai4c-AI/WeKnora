@@ -706,6 +706,27 @@ ONTOLOGY_EXTRACT_MIN_ENTITIES=2
 1. `migrations/versioned/000052_chunk_ontology.up.sql`
 2. `migrations/versioned/000053_ontology_canonical_map.up.sql`
 
+### 9.7 Windows Go 构建中的 DuckDB 动态库
+
+Windows 下直接运行 `go build ./...` 可能会因为 DuckDB 预编译静态库和本机 MSYS2 UCRT GCC 的 C++ runtime ABI 不匹配而失败，典型错误是：
+
+```text
+undefined reference to `__emutls_v._ZSt11__once_call'
+undefined reference to `__emutls_v._ZSt15__once_callable'
+```
+
+本项目使用的 `github.com/duckdb/duckdb-go-bindings v0.10502.0` 对应 DuckDB `v1.5.2`。Windows 本地验证建议使用官方 DuckDB `v1.5.2` 动态库，并通过 `duckdb_use_lib` build tag 构建：
+
+```bash
+PATH="/e/tmp/duckdb-v1.5.2:/c/msys64/ucrt64/bin:$PATH" \
+CGO_LDFLAGS="-lduckdb -LE:/tmp/duckdb-v1.5.2" \
+CC=C:/msys64/ucrt64/bin/gcc.exe \
+CXX=C:/msys64/ucrt64/bin/g++.exe \
+go build -tags=duckdb_use_lib ./...
+```
+
+完整下载、测试和排障步骤见：[Windows DuckDB 动态库构建说明](../../ontology-slice-duckdb-windows-build.md)。
+
 ---
 
 ## 10. 风险与权衡
