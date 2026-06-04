@@ -6,7 +6,6 @@ import (
 	"os"
 	"sort"
 	"strings"
-	"sync/atomic"
 
 	"github.com/gin-gonic/gin"
 
@@ -18,14 +17,12 @@ import (
 // route (we have ~150 of them). DebugMode features (panic recovery
 // stacktraces, runtime warnings) are preserved.
 //
-// In place of the per-route spam, prints a single summary line at the
-// end of router build with the route count.
+// In place of the per-route spam, callers can print a single summary line at
+// the end of router build with the real route count.
 //
 // Call once at the start of main(), before container.BuildContainer.
 func SilenceGinRouteSpam() {
-	var count int64
 	gin.DebugPrintRouteFunc = func(httpMethod, absolutePath, handlerName string, nuHandlers int) {
-		atomic.AddInt64(&count, 1)
 	}
 	// gin.DebugPrintFunc handles non-route debug lines (e.g. "Listening
 	// and serving HTTP"). Route them through the structured logger so
@@ -39,22 +36,15 @@ func SilenceGinRouteSpam() {
 		}
 		logger.Info(context.Background(), "[gin] "+msg)
 	}
-	// Expose a way to print the suppressed count once routes are wired up.
-	ginRouteCount = &count
 }
 
-// ginRouteCount is set by SilenceGinRouteSpam and read by LogGinRouteCount
-// so callers can print a one-line summary after router build.
-var ginRouteCount *int64
-
 // LogGinRouteCount writes a single summary line for the number of routes
-// Gin registered. Safe to call even if SilenceGinRouteSpam wasn't called
-// (it just becomes a no-op).
-func LogGinRouteCount(ctx context.Context) {
-	if ginRouteCount == nil {
+// on the built engine. Safe to call with a nil engine.
+func LogGinRouteCount(ctx context.Context, engine *gin.Engine) {
+	if engine == nil {
 		return
 	}
-	logger.Infof(ctx, "[gin] registered %d routes", atomic.LoadInt64(ginRouteCount))
+	logger.Infof(ctx, "[gin] registered %d routes", len(engine.Routes()))
 }
 
 // envVarSpec describes one env var to surface in the startup banner.

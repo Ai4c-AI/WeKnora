@@ -196,7 +196,7 @@ func main() {
 		) error {
 			server := &http.Server{Handler: router}
 
-			runtime.LogGinRouteCount(context.Background())
+			runtime.LogGinRouteCount(context.Background(), router)
 
 			// 127.0.0.1 + saved port from settings (desktop-prefs.json), or :0 for random free port.
 			addr := desktopBackendListenAddr()

@@ -197,6 +197,9 @@ docker compose up -d   # Start core services
 Once started, visit **http://localhost** to get started.
 
 > To use a local Ollama model, run `ollama serve > /dev/null 2>&1 &` first.
+>
+> If your `.env` keeps `NEO4J_ENABLE=true`, start Compose with `--profile neo4j`
+> (or `--profile full`). Otherwise the app will wait for `neo4j:7687` during startup.
 
 ### 🔧 Optional Services (Docker Compose Profiles)
 
@@ -213,6 +216,13 @@ Add `--profile` flags to enable additional components. Multiple profiles can be 
 Combine profiles: `docker compose --profile neo4j --profile minio up -d`
 
 Stop services: `docker compose down`
+
+### Local Build Notes
+
+When building the `app` image locally, both `docker compose build app` and
+`make docker-build-app` default to `GOPROXY=https://goproxy.cn,direct` and
+`GOSUMDB=off`. If your network requires different Go module settings, override
+`GOPROXY` and `GOSUMDB` in your shell before running the build command.
 
 ### 🌐 Service URLs
 

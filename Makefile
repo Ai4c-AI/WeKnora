@@ -105,6 +105,8 @@ docker-build-app:
 	@eval $$(./scripts/get_version.sh env); \
 	./scripts/get_version.sh info; \
 	docker build --platform $(PLATFORM) \
+		--build-arg GOPROXY_ARG=$${GOPROXY:-https://goproxy.cn,direct} \
+		--build-arg GOSUMDB_ARG=$${GOSUMDB:-off} \
 		--build-arg VERSION_ARG="$$VERSION" \
 		--build-arg COMMIT_ID_ARG="$$COMMIT_ID" \
 		--build-arg BUILD_TIME_ARG="$$BUILD_TIME" \

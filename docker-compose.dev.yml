@@ -206,7 +206,13 @@ services:
       - GRPC_TLS_SERVER_NAME=${GRPC_TLS_SERVER_NAME:-}
       - GRPC_AUTH_TOKEN=${GRPC_AUTH_TOKEN:-}
     healthcheck:
-      test: ["CMD", "grpc_health_probe", "-addr=localhost:50051"]
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import grpc,sys; from grpc_health.v1 import health_pb2, health_pb2_grpc; channel=grpc.insecure_channel('localhost:50051'); response=health_pb2_grpc.HealthStub(channel).Check(health_pb2.HealthCheckRequest(), timeout=5); sys.exit(0 if response.status == health_pb2.HealthCheckResponse.SERVING else 1)",
+        ]
       interval: 30s
       timeout: 10s
       retries: 3

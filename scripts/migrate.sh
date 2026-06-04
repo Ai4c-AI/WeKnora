@@ -26,7 +26,7 @@ MIGRATIONS_DIR="${MIGRATIONS_DIR:-migrations/versioned}"
 # Check if migrate tool is installed
 if ! command -v migrate &> /dev/null; then
     echo "Error: migrate tool is not installed"
-    echo "Install it with: go install -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@latest"
+    echo "Install it with: go install -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@v4.19.1"
     exit 1
 fi
 

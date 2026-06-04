@@ -129,7 +129,7 @@ func main() {
 			done()
 		}()
 
-		runtime.LogGinRouteCount(context.Background())
+		runtime.LogGinRouteCount(context.Background(), router)
 		logger.Infof(context.Background(), "Server is running at %s", addr)
 		if err := server.Serve(listener); err != nil && err != http.ErrServerClosed {
 			return fmt.Errorf("server error: %v", err)

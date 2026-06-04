@@ -5,7 +5,7 @@ WORKDIR /app
 
 # 通过构建参数接收敏感信息
 ARG GOPRIVATE_ARG
-ARG GOPROXY_ARG
+ARG GOPROXY_ARG=https://goproxy.cn,direct
 ARG GOSUMDB_ARG=off
 ARG APK_MIRROR_ARG
 
@@ -13,6 +13,7 @@ ARG APK_MIRROR_ARG
 ENV GOPRIVATE=${GOPRIVATE_ARG}
 ENV GOPROXY=${GOPROXY_ARG}
 ENV GOSUMDB=${GOSUMDB_ARG}
+ENV PATH=/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin
 
 # Install dependencies
 RUN if [ -n "$APK_MIRROR_ARG" ]; then \
@@ -22,7 +23,7 @@ RUN if [ -n "$APK_MIRROR_ARG" ]; then \
     apt-get install -y git build-essential libsqlite3-dev
 
 # Install migrate tool
-RUN go install -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@latest
+RUN go install -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@v4.19.1
 
 # Copy go mod and sum files
 COPY go.mod go.sum ./

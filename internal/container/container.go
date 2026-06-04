@@ -672,7 +672,7 @@ func resetPendingTasks(db *gorm.DB) {
 		staleCutoff := time.Now().Add(-30 * time.Minute)
 		knowledgeQuery = knowledgeQuery.Where("updated_at < ?", staleCutoff)
 		summaryQuery = summaryQuery.Where("updated_at < ?", staleCutoff)
-		syncQuery = syncQuery.Where("start_time < ?", staleCutoff)
+		syncQuery = syncQuery.Where("started_at < ?", staleCutoff)
 	}
 
 	// Cancel orphaned trace spans for knowledge rows we are about to mark
@@ -680,7 +680,7 @@ func resetPendingTasks(db *gorm.DB) {
 	// prevents the UI from showing duplicate running postprocess.*
 	// subspans when a later retry also opens fresh spans.
 	var stuckKnowledge []types.Knowledge
-	if err := knowledgeQuery.Select("id").Find(&stuckKnowledge).Error; err != nil {
+	if err := knowledgeQuery.Session(&gorm.Session{}).Select("id").Find(&stuckKnowledge).Error; err != nil {
 		logger.Warnf(ctx, "resetPendingTasks: list stuck knowledge failed: %v", err)
 	} else {
 		for _, k := range stuckKnowledge {
@@ -700,7 +700,7 @@ func resetPendingTasks(db *gorm.DB) {
 
 	// 1. Reset knowledge parsing tasks (including finalizing rows whose
 	// enrichment subtasks were lost with the process).
-	result := knowledgeQuery.Updates(map[string]interface{}{
+	result := knowledgeQuery.Session(&gorm.Session{}).Updates(map[string]interface{}{
 		"parse_status":           types.ParseStatusFailed,
 		"error_message":          "Task interrupted due to application restart",
 		"pending_subtasks_count": 0,
@@ -714,7 +714,7 @@ func resetPendingTasks(db *gorm.DB) {
 	}
 
 	// 2. Reset knowledge summary tasks
-	resultSummary := summaryQuery.Updates(map[string]interface{}{
+	resultSummary := summaryQuery.Session(&gorm.Session{}).Updates(map[string]interface{}{
 		"summary_status": types.SummaryStatusFailed,
 	})
 	if resultSummary.Error != nil {
@@ -726,10 +726,10 @@ func resetPendingTasks(db *gorm.DB) {
 	}
 
 	// 3. Reset data source sync tasks
-	resultSync := syncQuery.Updates(map[string]interface{}{
+	resultSync := syncQuery.Session(&gorm.Session{}).Updates(map[string]interface{}{
 		"status":        types.SyncLogStatusFailed,
 		"error_message": "Sync interrupted due to application restart",
-		"end_time":      time.Now(),
+		"finished_at":   time.Now(),
 	})
 	if resultSync.Error != nil {
 		logger.Warnf(context.Background(), "Failed to reset pending data source sync tasks: %v", resultSync.Error)

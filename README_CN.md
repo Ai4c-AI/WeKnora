@@ -179,6 +179,10 @@ docker compose up -d   # 启动核心服务
 启动成功后访问 **http://localhost** 即可使用。
 
 > 如需使用本地 Ollama 模型，请先运行 `ollama serve > /dev/null 2>&1 &`
+>
+> 如果你的 `.env` 中保留了 `NEO4J_ENABLE=true`，启动 Compose 时需要带上
+> `--profile neo4j`（或直接使用 `--profile full`），否则 `app` 启动时会一直等待
+> `neo4j:7687`。
 
 ### 🔧 可选服务（Docker Compose Profile）
 
@@ -195,6 +199,13 @@ docker compose up -d   # 启动核心服务
 组合示例：`docker compose --profile neo4j --profile minio up -d`
 
 停止服务：`docker compose down`
+
+### 本地构建说明
+
+本地构建 `app` 镜像时，`docker compose build app` 和 `make docker-build-app`
+都会默认使用 `GOPROXY=https://goproxy.cn,direct` 与 `GOSUMDB=off`。如果你所在的
+网络环境需要不同的 Go 模块代理或校验设置，请在执行构建命令前先在当前 shell 中
+覆盖 `GOPROXY`、`GOSUMDB`。
 
 ### 🌐 服务地址
 
