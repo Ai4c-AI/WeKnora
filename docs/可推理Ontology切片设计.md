@@ -279,7 +279,7 @@ func (b *graphBuilder) extractMicroTBoxes(ctx context.Context, chunks []*types.C
 存储位置：直接挂在 `chunks` 表上，不另起新表。
 
 ```sql
--- migrations/versioned/000052_chunk_ontology.up.sql
+-- migrations/versioned/000057_chunk_ontology.up.sql
 ALTER TABLE chunks
   ADD COLUMN ontology_json JSONB DEFAULT NULL,
   ADD COLUMN ontology_extracted_at TIMESTAMPTZ DEFAULT NULL,
@@ -646,7 +646,7 @@ type Chunk struct {
 ### 5.4 跨切片对齐表【新增】
 
 ```sql
--- migrations/versioned/000053_ontology_canonical_map.up.sql
+-- migrations/versioned/000058_ontology_canonical_map.up.sql
 CREATE TABLE ontology_canonical_map (
     id              BIGSERIAL PRIMARY KEY,
     tenant_id       BIGINT NOT NULL,
@@ -1570,15 +1570,15 @@ ONTOLOGY_EXTRACT_MIN_ENTITIES=2
 新增三个迁移文件：
 ```
 migrations/versioned/
-  000052_chunk_ontology.up.sql        # chunk 表加字段
-  000052_chunk_ontology.down.sql
-  000053_ontology_canonical_map.up.sql
-  000053_ontology_canonical_map.down.sql
+  000057_chunk_ontology.up.sql        # chunk 表加字段
+  000057_chunk_ontology.down.sql
+  000058_ontology_canonical_map.up.sql
+  000058_ontology_canonical_map.down.sql
 ```
 
 执行顺序（必须）：
-1. 先执行 000052_chunk_ontology（新增 chunks 承载字段）
-2. 再执行 000053_ontology_canonical_map（新增跨切片对齐表）
+1. 先执行 000057_chunk_ontology（新增 chunks 承载字段）
+2. 再执行 000058_ontology_canonical_map（新增跨切片对齐表）
 
 ### 10.4 配置文件
 

@@ -252,7 +252,7 @@ type Chunk struct {
 
 ### 3.3 数据库迁移
 
-**迁移 000052：chunk_ontology.up.sql**
+**迁移 000057：chunk_ontology.up.sql**
 
 ```sql
 ALTER TABLE chunks
@@ -269,7 +269,7 @@ CREATE INDEX idx_chunks_ontology_class_ids
   ON chunks USING GIN ((jsonb_path_query_array(ontology_json, '$.classes[*].id')));
 ```
 
-**迁移 000053：ontology_canonical_map.up.sql**
+**迁移 000058：ontology_canonical_map.up.sql**
 
 ```sql
 CREATE TABLE ontology_canonical_map (
@@ -290,7 +290,7 @@ CREATE INDEX idx_canonical_map_aliases
   ON ontology_canonical_map USING GIN (aliases);
 ```
 
-执行顺序：先 000052，再 000053。
+执行顺序：先 000057，再 000058。
 
 ---
 
@@ -703,8 +703,8 @@ ONTOLOGY_EXTRACT_MIN_ENTITIES=2
 ### 9.6 迁移执行
 
 按顺序执行：
-1. `migrations/versioned/000052_chunk_ontology.up.sql`
-2. `migrations/versioned/000053_ontology_canonical_map.up.sql`
+1. `migrations/versioned/000057_chunk_ontology.up.sql`
+2. `migrations/versioned/000058_ontology_canonical_map.up.sql`
 
 ### 9.7 Windows Go 构建中的 DuckDB 动态库
 

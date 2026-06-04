@@ -19,10 +19,10 @@
 |------|---------------|
 | `internal/types/micro_tbox.go` | MicroTBox, ClassDecl, PropertyDecl, ShapeDecl, ShapeConstraint, FreeAxiom, Triple types |
 | `internal/types/ontology_reason.go` | Ontology sidecar request/response DTOs shared by service client and agent tool |
-| `migrations/versioned/000052_chunk_ontology.up.sql` | Add ontology columns to chunks table |
-| `migrations/versioned/000052_chunk_ontology.down.sql` | Rollback 000052 |
-| `migrations/versioned/000053_ontology_canonical_map.up.sql` | Create ontology_canonical_map table |
-| `migrations/versioned/000053_ontology_canonical_map.down.sql` | Rollback 000053 |
+| `migrations/versioned/000057_chunk_ontology.up.sql` | Add ontology columns to chunks table |
+| `migrations/versioned/000057_chunk_ontology.down.sql` | Rollback 000057 |
+| `migrations/versioned/000058_ontology_canonical_map.up.sql` | Create ontology_canonical_map table |
+| `migrations/versioned/000058_ontology_canonical_map.down.sql` | Rollback 000058 |
 | `internal/types/canonical_map.go` | CanonicalMapEntry model + canonical map kind constants |
 | `internal/types/interfaces/canonical_map.go` | CanonicalMapRepository interface |
 | `internal/application/repository/canonical_map.go` | GORM-backed CanonicalMapRepository implementation |
@@ -184,15 +184,15 @@ git commit -m "feat(ontology): add ontology fields to Chunk struct"
 ### Task 3: Database Migrations
 
 **Files:**
-- Create: `migrations/versioned/000052_chunk_ontology.up.sql`
-- Create: `migrations/versioned/000052_chunk_ontology.down.sql`
-- Create: `migrations/versioned/000053_ontology_canonical_map.up.sql`
-- Create: `migrations/versioned/000053_ontology_canonical_map.down.sql`
+- Create: `migrations/versioned/000057_chunk_ontology.up.sql`
+- Create: `migrations/versioned/000057_chunk_ontology.down.sql`
+- Create: `migrations/versioned/000058_ontology_canonical_map.up.sql`
+- Create: `migrations/versioned/000058_ontology_canonical_map.down.sql`
 
-- [ ] **Step 1: Create migration 000052 up (chunk ontology columns)**
+- [ ] **Step 1: Create migration 000057 up (chunk ontology columns)**
 
 ```sql
--- migrations/versioned/000052_chunk_ontology.up.sql
+-- migrations/versioned/000057_chunk_ontology.up.sql
 ALTER TABLE chunks
   ADD COLUMN ontology_json          JSONB       DEFAULT NULL,
   ADD COLUMN ontology_extracted_at  TIMESTAMPTZ DEFAULT NULL,
@@ -207,10 +207,10 @@ CREATE INDEX idx_chunks_ontology_class_ids
   ON chunks USING GIN ((jsonb_path_query_array(ontology_json, '$.classes[*].id')));
 ```
 
-- [ ] **Step 2: Create migration 000052 down**
+- [ ] **Step 2: Create migration 000057 down**
 
 ```sql
--- migrations/versioned/000052_chunk_ontology.down.sql
+-- migrations/versioned/000057_chunk_ontology.down.sql
 DROP INDEX IF EXISTS idx_chunks_ontology_class_ids;
 DROP INDEX IF EXISTS idx_chunks_ontology_extracted;
 
@@ -221,10 +221,10 @@ ALTER TABLE chunks
   DROP COLUMN IF EXISTS ontology_json;
 ```
 
-- [ ] **Step 3: Create migration 000053 up (canonical map table)**
+- [ ] **Step 3: Create migration 000058 up (canonical map table)**
 
 ```sql
--- migrations/versioned/000053_ontology_canonical_map.up.sql
+-- migrations/versioned/000058_ontology_canonical_map.up.sql
 CREATE TABLE ontology_canonical_map (
     id                BIGSERIAL PRIMARY KEY,
     tenant_id         BIGINT NOT NULL,
@@ -243,20 +243,20 @@ CREATE INDEX idx_canonical_map_aliases
   ON ontology_canonical_map USING GIN (aliases);
 ```
 
-- [ ] **Step 4: Create migration 000053 down**
+- [ ] **Step 4: Create migration 000058 down**
 
 ```sql
--- migrations/versioned/000053_ontology_canonical_map.down.sql
+-- migrations/versioned/000058_ontology_canonical_map.down.sql
 DROP TABLE IF EXISTS ontology_canonical_map;
 ```
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add migrations/versioned/000052_chunk_ontology.up.sql \
-       migrations/versioned/000052_chunk_ontology.down.sql \
-       migrations/versioned/000053_ontology_canonical_map.up.sql \
-       migrations/versioned/000053_ontology_canonical_map.down.sql
+git add migrations/versioned/000057_chunk_ontology.up.sql \
+       migrations/versioned/000057_chunk_ontology.down.sql \
+       migrations/versioned/000058_ontology_canonical_map.up.sql \
+       migrations/versioned/000058_ontology_canonical_map.down.sql
 git commit -m "feat(ontology): add chunk ontology columns and canonical map table migrations"
 ```
 
