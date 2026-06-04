@@ -15,7 +15,7 @@ public class PostgresOntologyRepo : IOntologyRepo
     }
 
     public async Task<List<OntologyChunkData>> GetChunkOntologies(
-        ulong tenantId,
+        long tenantId,
         IReadOnlyList<string> knowledgeBaseIds,
         IReadOnlyList<string> chunkIds)
     {
@@ -56,7 +56,7 @@ public class PostgresOntologyRepo : IOntologyRepo
         return results;
     }
 
-    public async Task<Dictionary<string, string>> GetCanonicalMap(ulong tenantId, string knowledgeBaseId)
+    public async Task<Dictionary<string, string>> GetCanonicalMap(long tenantId, string knowledgeBaseId)
     {
         await using var conn = new NpgsqlConnection(_connectionString);
         await conn.OpenAsync();

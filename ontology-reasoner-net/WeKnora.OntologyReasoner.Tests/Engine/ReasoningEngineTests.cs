@@ -84,6 +84,29 @@ public class ReasoningEngineTests
     }
 
     [Fact]
+    public void Reason_RdfsSubClassOf_InfersTypeHierarchy()
+    {
+        var dataGraph = new Graph();
+        var alice = dataGraph.CreateUriNode(new Uri(Ns + "alice"));
+        var rdfType = dataGraph.CreateUriNode(new Uri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type"));
+        var softwareEngineer = dataGraph.CreateUriNode(new Uri(Ns + "SoftwareEngineer"));
+        dataGraph.Assert(alice, rdfType, softwareEngineer);
+
+        var schemaGraph = new Graph();
+        var engineer = schemaGraph.CreateUriNode(new Uri(Ns + "Engineer"));
+        var rdfsSubClassOf = schemaGraph.CreateUriNode(new Uri("http://www.w3.org/2000/01/rdf-schema#subClassOf"));
+        schemaGraph.Assert(softwareEngineer, rdfsSubClassOf, engineer);
+
+        var engine = new ReasoningEngine();
+        var result = engine.Reason(dataGraph, schemaGraph, "");
+
+        Assert.Contains(result.Triples, t =>
+            t.Subject.Equals(alice) &&
+            t.Predicate.Equals(rdfType) &&
+            t.Object.Equals(engineer));
+    }
+
+    [Fact]
     public void Reason_RespectsMaxIterations()
     {
         var dataGraph = new Graph();

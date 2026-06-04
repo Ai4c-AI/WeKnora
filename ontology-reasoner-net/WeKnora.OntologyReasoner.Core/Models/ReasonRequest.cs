@@ -5,7 +5,7 @@ namespace WeKnora.OntologyReasoner.Core.Models;
 public record ReasonRequest
 {
     [JsonPropertyName("tenant_id")]
-    public ulong TenantId { get; init; }
+    public long TenantId { get; init; }
 
     [JsonPropertyName("knowledge_base_ids")]
     public List<string> KnowledgeBaseIds { get; init; } = [];

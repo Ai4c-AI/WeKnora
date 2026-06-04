@@ -49,7 +49,7 @@ public class SliceAssemblerTests
     {
         var repo = new FakeOntologyRepo(
             [
-                (1UL, "kb-allowed", new MicroTBox
+                (1L, "kb-allowed", new MicroTBox
                 {
                     Properties =
                     [
@@ -64,7 +64,7 @@ public class SliceAssemblerTests
                         },
                     ],
                 }, [], "chunk-1"),
-                (2UL, "kb-denied", new MicroTBox
+                (2L, "kb-denied", new MicroTBox
                 {
                     Properties =
                     [
@@ -93,7 +93,7 @@ public class SliceAssemblerTests
         var response = await assembler.Reason(request);
 
         Assert.Equal("ok", response.Status);
-        Assert.Equal(1UL, repo.LastFetchTenantId);
+        Assert.Equal(1L, repo.LastFetchTenantId);
         Assert.Equal(["kb-allowed"], repo.LastFetchKnowledgeBaseIds);
         Assert.Equal(["chunk-1", "chunk-2"], repo.LastFetchChunkIds);
         Assert.Equal(["chunk-1"], response.EvidenceChunks);
@@ -104,7 +104,7 @@ public class SliceAssemblerTests
     {
         var repo = new FakeOntologyRepo(
             [
-                (1UL, "kb-1", new MicroTBox
+                (1L, "kb-1", new MicroTBox
                 {
                     Properties =
                     [
@@ -143,7 +143,7 @@ public class SliceAssemblerTests
         Assert.Equal("ok", response.Status);
         Assert.Equal("fetched", response.DataSource);
         Assert.Equal(["chunk-1"], response.EvidenceChunks);
-        Assert.Equal([(1UL, "kb-1"), (1UL, "kb-2")], repo.CanonicalMapCalls);
+        Assert.Equal([(1L, "kb-1"), (1L, "kb-2")], repo.CanonicalMapCalls);
         Assert.Contains(response.InferredTriples, t => t.S == "alice" && t.P == "ancestorOf" && t.O == "carol");
         Assert.DoesNotContain(response.InferredTriples, t => t.P == "parentOf");
         Assert.Contains(response.Results, result => (int)result["inferred_count"]! == response.InferredTriples.Count);
@@ -343,7 +343,7 @@ public class SliceAssemblerTests
     {
         var repo = new FakeOntologyRepo(
             [
-                (1UL, "kb-1", new MicroTBox
+                (1L, "kb-1", new MicroTBox
                 {
                     Properties =
                     [
@@ -363,7 +363,7 @@ public class SliceAssemblerTests
                     new TripleDto { S = "b1", P = "spouseOf", O = "c1" },
                 ],
                 "chunk-1"),
-                (1UL, "kb-2", new MicroTBox
+                (1L, "kb-2", new MicroTBox
                 {
                     Properties =
                     [
@@ -411,7 +411,7 @@ public class SliceAssemblerTests
     {
         var repo = new FakeOntologyRepo(
             [
-                (1UL, "kb-1", new MicroTBox
+                (1L, "kb-1", new MicroTBox
                 {
                     Properties =
                     [
@@ -426,7 +426,7 @@ public class SliceAssemblerTests
                         },
                     ],
                 }, [], "chunk-1"),
-                (1UL, "kb-2", new MicroTBox
+                (1L, "kb-2", new MicroTBox
                 {
                     Properties =
                     [
@@ -469,18 +469,18 @@ public class SliceAssemblerTests
 
     private sealed class FakeOntologyRepo : IOntologyRepo
     {
-        private readonly List<(ulong TenantId, string KnowledgeBaseId, MicroTBox TBox, List<TripleDto> Facts, string ChunkId)> _chunkOntologies;
+        private readonly List<(long TenantId, string KnowledgeBaseId, MicroTBox TBox, List<TripleDto> Facts, string ChunkId)> _chunkOntologies;
         private readonly Dictionary<string, Dictionary<string, string>> _canonicalMapsByKnowledgeBaseId;
 
         public FakeOntologyRepo(
             List<(MicroTBox TBox, List<TripleDto> Facts, string ChunkId)> chunkOntologies,
             Dictionary<string, string> canonicalMap)
-            : this(chunkOntologies.Select(item => (1UL, "kb-1", item.TBox, item.Facts, item.ChunkId)).ToList(), canonicalMap)
+            : this(chunkOntologies.Select(item => (1L, "kb-1", item.TBox, item.Facts, item.ChunkId)).ToList(), canonicalMap)
         {
         }
 
         public FakeOntologyRepo(
-            List<(ulong TenantId, string KnowledgeBaseId, MicroTBox TBox, List<TripleDto> Facts, string ChunkId)> chunkOntologies,
+            List<(long TenantId, string KnowledgeBaseId, MicroTBox TBox, List<TripleDto> Facts, string ChunkId)> chunkOntologies,
             Dictionary<string, string> canonicalMap)
             : this(
                 chunkOntologies,
@@ -492,22 +492,22 @@ public class SliceAssemblerTests
         }
 
         public FakeOntologyRepo(
-            List<(ulong TenantId, string KnowledgeBaseId, MicroTBox TBox, List<TripleDto> Facts, string ChunkId)> chunkOntologies,
+            List<(long TenantId, string KnowledgeBaseId, MicroTBox TBox, List<TripleDto> Facts, string ChunkId)> chunkOntologies,
             Dictionary<string, Dictionary<string, string>> canonicalMapsByKnowledgeBaseId)
         {
             _chunkOntologies = chunkOntologies;
             _canonicalMapsByKnowledgeBaseId = canonicalMapsByKnowledgeBaseId;
         }
 
-        public ulong? LastFetchTenantId { get; private set; }
+        public long? LastFetchTenantId { get; private set; }
 
         public IReadOnlyList<string>? LastFetchKnowledgeBaseIds { get; private set; }
 
         public IReadOnlyList<string>? LastFetchChunkIds { get; private set; }
 
-        public List<(ulong TenantId, string KnowledgeBaseId)> CanonicalMapCalls { get; } = [];
+        public List<(long TenantId, string KnowledgeBaseId)> CanonicalMapCalls { get; } = [];
 
-        public Task<List<OntologyChunkData>> GetChunkOntologies(ulong tenantId, IReadOnlyList<string> knowledgeBaseIds, IReadOnlyList<string> chunkIds)
+        public Task<List<OntologyChunkData>> GetChunkOntologies(long tenantId, IReadOnlyList<string> knowledgeBaseIds, IReadOnlyList<string> chunkIds)
         {
             LastFetchTenantId = tenantId;
             LastFetchKnowledgeBaseIds = knowledgeBaseIds.ToList();
@@ -521,7 +521,7 @@ public class SliceAssemblerTests
                 .ToList());
         }
 
-        public Task<Dictionary<string, string>> GetCanonicalMap(ulong tenantId, string knowledgeBaseId)
+        public Task<Dictionary<string, string>> GetCanonicalMap(long tenantId, string knowledgeBaseId)
         {
             CanonicalMapCalls.Add((tenantId, knowledgeBaseId));
             return Task.FromResult(_canonicalMapsByKnowledgeBaseId.TryGetValue(knowledgeBaseId, out var canonicalMap)

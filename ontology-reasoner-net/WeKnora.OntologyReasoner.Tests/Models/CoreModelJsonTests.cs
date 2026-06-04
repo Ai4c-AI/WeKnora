@@ -46,7 +46,7 @@ public class CoreModelJsonTests
     {
         var request = new ReasonRequest
         {
-            TenantId = ulong.MaxValue,
+            TenantId = long.MaxValue,
             KnowledgeBaseIds = ["kb-1"],
             ChunkIds = ["chunk-1"],
             InstanceFacts = [new TripleDto { S = "Romeo", P = "loves", O = "Juliet" }],
@@ -57,7 +57,7 @@ public class CoreModelJsonTests
 
         using var doc = JsonDocument.Parse(json);
         var root = doc.RootElement;
-        Assert.Equal(ulong.MaxValue, root.GetProperty("tenant_id").GetUInt64());
+        Assert.Equal(long.MaxValue, root.GetProperty("tenant_id").GetInt64());
         Assert.Equal("kb-1", root.GetProperty("knowledge_base_ids")[0].GetString());
         Assert.Equal("chunk-1", root.GetProperty("chunk_ids")[0].GetString());
         Assert.Equal("Romeo", root.GetProperty("instance_facts")[0].GetProperty("s").GetString());

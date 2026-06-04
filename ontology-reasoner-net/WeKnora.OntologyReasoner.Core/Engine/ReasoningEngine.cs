@@ -1,57 +1,80 @@
-using System.Text.RegularExpressions;
 using VDS.RDF;
+using VDS.RDF.Parsing;
+using VDS.RDF.Query.Inference;
 
 namespace WeKnora.OntologyReasoner.Core.Engine;
 
 public class ReasoningEngine
 {
-    private static readonly Regex TransitiveRulePattern = new(
-        @"\?\w+\s+<(?<predicate>[^>]+)>\s+\?\w+\s*\.\s*\?\w+\s+<\k<predicate>>\s+\?\w+[\s\S]*\?\w+\s+<\k<predicate>>\s+\?\w+",
-        RegexOptions.Compiled);
+    private const int GrowthLimit = 100;
 
     public IGraph Reason(IGraph dataGraph, IGraph schemaGraph, string n3Rules, int maxIterations = 10)
     {
         var working = new Graph();
-        working.Merge(dataGraph);
-        working.Merge(schemaGraph);
 
-        var predicates = TransitiveRulePattern.Matches(n3Rules)
-            .Select(match => match.Groups["predicate"].Value)
-            .Distinct(StringComparer.Ordinal)
-            .Select(predicate => working.CreateUriNode(new Uri(predicate)))
-            .ToList();
-        if (predicates.Count == 0)
+        // RDFS reasoner handles rdfs:subClassOf → rdf:type propagation
+        // Apply it over the combined data + schema graph, then merge results into working
+        var rdfsReasoner = new StaticRdfsReasoner();
+        rdfsReasoner.Initialise(schemaGraph);
+
+        var rdfsInput = new Graph();
+        rdfsInput.Merge(dataGraph);
+        rdfsInput.Merge(schemaGraph);
+        rdfsReasoner.Apply(rdfsInput);
+        working.Merge(rdfsInput);
+
+        // N3 reasoners handle custom forward rules (transitive, symmetric, inverseOf, etc.).
+        // dotNetRDF 3.3 applies a single implication reliably; initialize one reasoner per
+        // generated rule line so multiple micro-TBox properties all participate.
+        var n3Reasoners = BuildN3Reasoners(n3Rules);
+        if (n3Reasoners.Count > 0)
         {
-            return working;
-        }
-
-        for (var iteration = 0; iteration < maxIterations; iteration++)
-        {
-            var inferred = predicates.SelectMany(predicate => InferTransitiveTriples(working, predicate)).ToList();
-            var added = false;
-            foreach (var triple in inferred)
+            for (var iteration = 0; iteration < maxIterations; iteration++)
             {
-                added |= working.Assert(triple);
-            }
+                var prevCount = working.Triples.Count;
+                foreach (var n3Reasoner in n3Reasoners)
+                {
+                    n3Reasoner.Apply(working);
+                }
 
-            if (!added)
-            {
-                break;
+                if (working.Triples.Count - prevCount == 0)
+                {
+                    break;
+                }
+
+                // Growth guard: single iteration added >100x previous count
+                if (working.Triples.Count > prevCount * GrowthLimit)
+                {
+                    break;
+                }
             }
         }
 
         return working;
     }
 
-    private static IEnumerable<Triple> InferTransitiveTriples(IGraph graph, IUriNode predicate)
+    private static List<SimpleN3RulesReasoner> BuildN3Reasoners(string n3Rules)
     {
-        var triples = graph.Triples.WithPredicate(predicate).ToList();
-        foreach (var left in triples)
+        if (string.IsNullOrWhiteSpace(n3Rules))
         {
-            foreach (var right in triples.Where(t => t.Subject.Equals(left.Object)))
-            {
-                yield return new Triple(left.Subject, predicate, right.Object);
-            }
+            return [];
         }
+
+        var reasoners = new List<SimpleN3RulesReasoner>();
+        foreach (var rule in n3Rules.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            if (string.IsNullOrWhiteSpace(rule))
+            {
+                continue;
+            }
+
+            var rulesGraph = new Graph();
+            rulesGraph.LoadFromString(rule, new Notation3Parser());
+            var reasoner = new SimpleN3RulesReasoner();
+            reasoner.Initialise(rulesGraph);
+            reasoners.Add(reasoner);
+        }
+
+        return reasoners;
     }
 }
