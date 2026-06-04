@@ -172,6 +172,10 @@ docker compose up -d   # コアサービスを起動
 起動後、**http://localhost** にアクセスして利用開始。
 
 > ローカル Ollama モデルを使用する場合は、先に `ollama serve > /dev/null 2>&1 &` を実行してください。
+>
+> `.env` で `NEO4J_ENABLE=true` のまま使う場合は、Compose 起動時に
+> `--profile neo4j`（または `--profile full`）を付けてください。付けないと
+> `app` は起動中に `neo4j:7687` を待ち続けます。
 
 ### 🔧 オプションサービス（Docker Compose Profile）
 
@@ -188,6 +192,13 @@ docker compose up -d   # コアサービスを起動
 組み合わせ例：`docker compose --profile neo4j --profile minio up -d`
 
 サービス停止：`docker compose down`
+
+### ローカルビルド時の注意
+
+`app` イメージをローカルでビルドする場合、`docker compose build app` と
+`make docker-build-app` は既定で `GOPROXY=https://goproxy.cn,direct` と
+`GOSUMDB=off` を使用します。ネットワーク環境に応じて、ビルド前にシェルで
+`GOPROXY` と `GOSUMDB` を上書きしてください。
 
 ### 🌐 サービスアドレス
 
