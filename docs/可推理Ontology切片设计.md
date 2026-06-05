@@ -1637,6 +1637,8 @@ ontology:
 
 ## 12. 专家审核与反馈闭环【新增设计】
 
+> 本节的 MVP 实施内容已拆分为独立规格书：[docs/superpowers/specs/2026-06-04-ontology-review-loop-mvp-design.md](superpowers/specs/2026-06-04-ontology-review-loop-mvp-design.md)。本节保留总体设计背景、演进方向与扩展思路；若进入首批实施，请以独立规格书为准。
+
 ### 12.1 为什么纳入正式设计
 
 切片式 ontology + LLM 抽取的方案在 §11.1 列出的三个风险——**LLM 跨 chunk 命名漂移**、**单 chunk 视角片面**、**LLM 编造 evidence**——共同点是**无法仅靠算法手段消除**，需要领域专家在循环中持续修正。没有审核闭环，ontology 质量会随知识库增长而单调下降。
