@@ -1223,6 +1223,7 @@ export default {
       use_tls: "TLS 사용",
       scheme: "프로토콜",
       grpc_address: "gRPC 주소",
+      database: "데이터베이스 이름",
       use_default_connection: "기본 연결 사용",
       index_name: "인덱스 이름",
       number_of_shards: "샤드 수",
@@ -2542,6 +2543,27 @@ export default {
       remoteDimensionDetected: "감지된 벡터 차원: {value}",
       supportsVisionLabel: "비전/멀티모달 지원",
       supportsVisionDesc: "모델의 이미지 등 멀티모달 입력 지원 여부",
+      thinkingControlLabel: "사고 모드 매개변수 형식",
+      thinkingControlDesc:
+        "에이전트 「사고 모드」 켜기/끄기 시 API에 어떻게 기록할지 결정합니다. 벤더/모델에 따라 미리 선택되며, 실제 API와 다르면 문서에 맞게 수정하세요. 「전송 안 함」을 선택하면 에이전트 「사고 모드」 스위치가 효과가 없습니다.",
+      thinkingControl: {
+        none: {
+          label: "사고 매개변수 전송 안 함",
+          hint: "에이전트 「사고 모드」 스위치가 효과 없음, 요청에 사고 관련 매개변수를 보내지 않음",
+        },
+        chatTemplateKwargs: {
+          label: "chat_template_kwargs",
+          hint: "사용자 정의 OpenAI 호환, NVIDIA NIM, vLLM / 로컬 Qwen 배포",
+        },
+        enableThinking: {
+          label: "enable_thinking",
+          hint: "Alibaba DashScope: qwen3, qwen-plus, qwen-max, qwen-turbo",
+        },
+        thinkingType: {
+          label: "thinking.type",
+          hint: 'Volcengine Ark; Tencent LKEAP (DeepSeek V3 등, LKEAP 기본값; R1은 「전송 안 함」)',
+        },
+      },
       dimensionHint:
         '모델이 선택되었습니다. "차원 감지" 버튼을 클릭하여 벡터 차원을 자동으로 가져옵니다',
       loadModelListFailed: "모델 목록 로드 실패",
