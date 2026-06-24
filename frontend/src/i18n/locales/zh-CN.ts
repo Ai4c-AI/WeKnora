@@ -2410,6 +2410,33 @@ export default {
           concurrency: "异步任务并发数",
         },
       },
+      keyDescriptions: {
+        auth: {
+          registration_mode:
+            "自助注册模式。self_serve = 任何人可注册账号；invite_only = 关闭公网注册，" +
+            "仅 Owner/Admin 可邀请。修改后立即生效，但谨慎对待 self_serve（公网会接受 spam）。",
+        },
+        ssrf: {
+          whitelist:
+            "SSRF 防护白名单。可填入 example.com / *.foo.com / 10.0.0.0/8 / 2001:db8::1。" +
+            "修改后立即生效。SSRF_WHITELIST_EXTRA 环境变量仍由部署方维护，不在此处覆盖。",
+        },
+        tenant: {
+          max_owned_per_user:
+            "每个非超管用户通过自助创建可拥有的最大租户数。每次创建租户时实时读取，" +
+            "修改后立即生效。0 表示使用内置默认值 10；负数表示完全关闭限制（不建议在公开部署使用）。",
+          default_storage_quota_gb:
+            "新建租户时默认分配的存储配额（GB），包含向量、原文、文本、索引等。" +
+            "仅在创建时读取，修改后只对之后新建的租户生效，不会回写已存在的租户。" +
+            "0 或负数表示使用内置默认值 10GB。",
+        },
+        asynq: {
+          concurrency:
+            "异步任务 worker 并发数（asynq 线程池大小）。" +
+            "文档解析、嵌入等任务多为 I/O 等待，适当提高可缩短批量上传排队时间。" +
+            "修改后需重启服务进程方可生效。",
+        },
+      },
       enumLabels: {
         auth: {
           registration_mode: {
@@ -3400,6 +3427,9 @@ export default {
       tabGraphTip: "Wiki 页面之间的引用关系图（即页面链接图谱），与「知识库设置 → 知识图谱」中基于 LLM 抽取的实体-关系图谱不是同一个概念",
       searchPlaceholder: "搜索 Wiki 页面...",
       searchNoResults: "没有找到匹配的页面",
+      viewModeToggle: "切换目录视图",
+      viewTree: "树形视图",
+      viewList: "列表视图",
       loadMore: "加载更多（还剩 {remaining} 条）",
       filterAll: "全部类型",
       newFolder: "新建目录",
@@ -4313,6 +4343,7 @@ export default {
     connectionSection: "连接配置",
     enableServiceDesc: "关闭后该服务不会被调用",
     testAfterSaveHint: "保存后可测试连接",
+    testResultTitle: "测试结果",
     unitSecond: "秒",
     unitTimes: "次",
     name: "服务名称",
@@ -4337,6 +4368,19 @@ export default {
     addEnvVar: "添加环境变量",
     enableService: "启用服务",
     authConfig: "认证配置",
+    authType: "认证方式",
+    authTypeNone: "无 / 自定义 Header",
+    authTypeApiKey: "API Key",
+    authTypeBearer: "Bearer Token",
+    authTypeOAuth: "OAuth 2.0（首次连接授权）",
+    oauthScopes: "Scopes（可选，空格分隔）",
+    oauthAuthorization: "授权状态",
+    oauthAuthorized: "已授权",
+    oauthUnauthorized: "未授权",
+    oauthAuthorize: "去授权",
+    oauthReauthorize: "重新授权",
+    oauthRevoke: "撤销授权",
+    oauthSaveFirstHint: "保存服务后，可在编辑页发起首次授权（每个用户独立授权）。",
     apiKey: "API Key",
     bearerToken: "Bearer Token",
     optional: "可选",
@@ -4357,6 +4401,36 @@ export default {
       updated: "MCP 服务已更新",
       createFailed: "创建 MCP 服务失败",
       updateFailed: "更新 MCP 服务失败",
+      authorized: "授权成功",
+      authorizeFailed: "发起授权失败",
+      revoked: "已撤销授权",
+      revokeFailed: "撤销失败",
+    },
+    customHeaders: {
+      label: "自定义请求头（可选）",
+      desc: "附加到每次 MCP 请求的 HTTP 请求头，常用于企业网关鉴权、链路追踪等场景。",
+      add: "添加请求头",
+      keyPlaceholder: "Header 名称",
+      valuePlaceholder: "Header 值",
+    },
+    codeImport: {
+      toggle: "从代码导入",
+      hint: "粘贴标准 mcpServers JSON 配置，自动填充表单",
+      placeholder:
+        '{\n  "mcpServers": {\n    "my-server": {\n      "url": "https://example.com/sse"\n    }\n  }\n}',
+      parse: "解析并填充",
+      editOverwriteHint: "导入会覆盖当前表单内容（不影响已保存的凭证，需点保存生效）",
+      errors: {
+        empty: "请先粘贴配置内容",
+        invalidJson: "无法解析，请检查 JSON 格式",
+        noServer: "未找到 MCP 服务配置",
+        missingUrl: "配置缺少 url",
+        stdioUnsupported: "暂不支持 stdio（command/args）配置，请使用带 url 的远程配置",
+      },
+      toasts: {
+        filled: "已填充表单，请检查后保存",
+        multipleServers: "检测到多个服务，已导入第一个：{name}",
+      },
     },
   },
   promptTemplate: {
@@ -4821,6 +4895,8 @@ export default {
       fileTypeWord: "Word 文档",
       fileTypePpt: "演示文稿",
       fileTypeExcel: "Excel 表格",
+      fileTypeEbook: "电子书",
+      fileTypeWebArchive: "网页归档",
       fileTypeCsv: "CSV 文件",
       fileTypeText: "纯文本",
       fileTypeJson: "JSON 文件",
@@ -5360,6 +5436,7 @@ export default {
     editTitle: "编辑数据源",
     nameLabel: "名称",
     namePlaceholder: "输入数据源名称",
+    sectionBasic: "基本信息",
     testConnection: "测试连接",
     testSuccess: "连接成功",
     testFailed: "连接失败",
@@ -5435,11 +5512,13 @@ export default {
       feishu: "飞书",
       notion: "Notion",
       yuque: "语雀",
+      rss: "RSS / Atom 订阅",
     },
     connectorDesc: {
       feishu: "同步飞书知识库中的文档、表格、文件",
       notion: "同步 Notion 中的页面和数据库",
       yuque: "同步语雀知识库中的文档",
+      rss: "同步 RSS / Atom 订阅源中的文章",
     },
     field: {
       appId: "App ID",
@@ -5448,6 +5527,10 @@ export default {
       apiToken: "API Token",
       baseUrl: "Base URL（可选）",
       baseUrlHint: "留空将使用语雀公有云 https://www.yuque.com；如果你使用的是语雀企业版或私有部署，请填写企业域名（例如 https://your-company.yuque.com）",
+      feedUrls: "订阅源地址",
+      feedUrlsHint: "每行一个 RSS / Atom 订阅源地址，支持同时填写多个",
+      authHeaders: "自定义请求头（可选）",
+      authHeadersHint: "用于访问私有订阅源，每行一个，格式为「名称: 值」，例如 Authorization: Bearer xxxx",
     },
     comingSoon: "即将支持",
     docHint: "在以下地址获取凭证：",

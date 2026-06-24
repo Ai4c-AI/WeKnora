@@ -1220,6 +1220,7 @@ export default {
       addModelsSuccess: 'Successfully added {count} model(s)',
       addModelsPartial: 'Added {success}, {failed} failed',
       addModelsFailed: 'Failed to add models',
+      addModelsAllExist: 'All four model types already exist',
       addModelsEmbeddingFailed: 'Embedding connection test failed; could not detect vector dimension',
       addModelsDisplayName: {
         chat: 'WeKnoraCloud Chat',
@@ -2523,6 +2524,9 @@ export default {
       tabGraphTip: 'A graph of links between Wiki pages (page-link graph). This is NOT the same as the LLM-extracted entity-relationship Knowledge Graph configured under "KB Settings → Knowledge Graph".',
       searchPlaceholder: 'Search wiki pages...',
       searchNoResults: 'No matching pages found',
+      viewModeToggle: 'Switch directory view',
+      viewTree: 'Tree view',
+      viewList: 'List view',
       loadMore: 'Load more ({remaining} remaining)',
       filterAll: 'All Types',
       newFolder: 'New Folder',
@@ -3380,6 +3384,26 @@ export default {
         },
         asynq: {
           concurrency: 'Async task worker concurrency',
+        },
+      },
+      keyDescriptions: {
+        auth: {
+          registration_mode:
+            'Self-service registration mode. self_serve = anyone can register an account; invite_only = public registration is disabled and only Owners/Admins can invite. Takes effect immediately after saving, but use self_serve with care (the public internet will send spam sign-ups).',
+        },
+        ssrf: {
+          whitelist:
+            'SSRF protection allowlist. Accepts entries such as example.com / *.foo.com / 10.0.0.0/8 / 2001:db8::1. Takes effect immediately after saving. The SSRF_WHITELIST_EXTRA environment variable is still maintained by the deployer and is not overridden here.',
+        },
+        tenant: {
+          max_owned_per_user:
+            'Maximum number of tenants a non-superuser may own via self-service creation. Read on every tenant creation and takes effect immediately after saving. 0 uses the built-in default of 10; a negative value disables the cap entirely (not recommended on public deployments).',
+          default_storage_quota_gb:
+            'Default storage quota (GB) assigned when a new tenant is created, covering vectors, originals, text, indexes, and related data. Read only at creation time — changes apply to newly created tenants only and do not retroactively update existing tenants. 0 or a negative value uses the built-in default of 10 GB.',
+        },
+        asynq: {
+          concurrency:
+            'Async task worker concurrency (asynq thread-pool size). Document parsing, embedding, and similar tasks are mostly I/O-bound, so raising this value can shorten queue time for bulk uploads. Requires a service process restart to take effect.',
         },
       },
       enumLabels: {
@@ -4363,6 +4387,32 @@ export default {
       updated: 'MCP service updated',
       createFailed: 'Failed to create MCP service',
       updateFailed: 'Failed to update MCP service'
+    },
+    customHeaders: {
+      label: 'Custom Headers (optional)',
+      desc: 'HTTP headers attached to every MCP request, commonly used for enterprise gateway auth, tracing, etc.',
+      add: 'Add Header',
+      keyPlaceholder: 'Header name',
+      valuePlaceholder: 'Header value'
+    },
+    codeImport: {
+      toggle: 'Import from code',
+      hint: 'Paste a standard mcpServers JSON config to auto-fill the form',
+      placeholder:
+        '{\n  "mcpServers": {\n    "my-server": {\n      "url": "https://example.com/sse"\n    }\n  }\n}',
+      parse: 'Parse & Fill',
+      editOverwriteHint: 'Importing overwrites the current form (saved credentials are unaffected; click Save to apply)',
+      errors: {
+        empty: 'Please paste the config first',
+        invalidJson: 'Unable to parse, please check the JSON format',
+        noServer: 'No MCP service config found',
+        missingUrl: 'The config is missing a url',
+        stdioUnsupported: 'stdio (command/args) configs are not supported; please use a remote config with a url'
+      },
+      toasts: {
+        filled: 'Form filled, please review and save',
+        multipleServers: 'Multiple services detected, imported the first one: {name}'
+      }
     }
   },
   promptTemplate: {
@@ -4827,6 +4877,8 @@ export default {
       fileTypeWord: 'Word Documents',
       fileTypePpt: 'Presentations',
       fileTypeExcel: 'Excel Spreadsheets',
+      fileTypeEbook: 'E-books',
+      fileTypeWebArchive: 'Web Archives',
       fileTypeCsv: 'CSV Files',
       fileTypeText: 'Plain Text',
       fileTypeJson: 'JSON Files',
@@ -5366,6 +5418,7 @@ export default {
     editTitle: 'Edit Data Source',
     nameLabel: 'Name',
     namePlaceholder: 'Enter data source name',
+    sectionBasic: 'Basic information',
     testConnection: 'Test Connection',
     testSuccess: 'Connection successful',
     testFailed: 'Connection failed',
@@ -5441,11 +5494,13 @@ export default {
       feishu: 'Feishu',
       notion: 'Notion',
       yuque: 'Yuque',
+      rss: 'RSS / Atom Feed',
     },
     connectorDesc: {
       feishu: 'Sync documents, spreadsheets and files from Feishu Wiki',
       notion: 'Sync pages and databases from Notion',
       yuque: 'Sync documents from Yuque knowledge bases',
+      rss: 'Sync articles from RSS / Atom feeds',
     },
     field: {
       appId: 'App ID',
@@ -5454,6 +5509,10 @@ export default {
       apiToken: 'API Token',
       baseUrl: 'Base URL (optional)',
       baseUrlHint: 'Leave empty to use the Yuque public cloud (https://www.yuque.com). For Yuque Enterprise or self-hosted deployments, enter your company domain (e.g. https://your-company.yuque.com).',
+      feedUrls: 'Feed URLs',
+      feedUrlsHint: 'One RSS / Atom feed URL per line; multiple feeds are supported.',
+      authHeaders: 'Custom headers (optional)',
+      authHeadersHint: 'For private feeds. One per line in "Name: Value" form, e.g. Authorization: Bearer xxxx',
     },
     comingSoon: 'Coming soon',
     docHint: 'Get credentials at:',
