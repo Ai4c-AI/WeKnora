@@ -2,6 +2,8 @@ package types
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -23,7 +25,18 @@ func (j *lazyJieba) CutForSearch(s string, hmm bool) []string {
 
 func (j *lazyJieba) instance() *gojieba.Jieba {
 	j.once.Do(func() {
-		j.jieba = gojieba.NewJieba()
+		dictDir := os.Getenv("JIEBA_DICT_DIR")
+		if dictDir == "" {
+			j.jieba = gojieba.NewJieba()
+		} else {
+			j.jieba = gojieba.NewJieba(
+				filepath.Join(dictDir, "jieba.dict.utf8"),
+				filepath.Join(dictDir, "hmm_model.utf8"),
+				filepath.Join(dictDir, "user.dict.utf8"),
+				filepath.Join(dictDir, "idf.utf8"),
+				filepath.Join(dictDir, "stop_words.utf8"),
+			)
+		}
 	})
 	return j.jieba
 }

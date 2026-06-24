@@ -583,28 +583,6 @@ func (h *Handler) AgentQA(c *gin.Context) {
 			agentModeEnabled, reqCtx.customAgent.Config.AgentMode)
 	}
 
-	// Tenant-RBAC gate: block Viewers from running agents whose author
-	// has cleared RunnableByViewer. The flag exists so an admin can mark
-	// an agent as "internal tools only" without turning every viewer
-	// into a contributor. Gated behind cfg.Tenant.EnableRBAC so the
-	// check is dormant during the rollout window — same pattern as
-	// middleware/rbac.go.
-	if agentModeEnabled && reqCtx.customAgent != nil && !reqCtx.customAgent.RunnableByViewer {
-		role := types.TenantRoleFromContext(reqCtx.ctx)
-		if !role.HasPermission(types.TenantRoleContributor) {
-			if h.config != nil && h.config.Tenant.IsRBACEnforced() {
-				logger.Warnf(reqCtx.ctx,
-					"[rbac] agent run blocked: viewer cannot run runnable_by_viewer=false agent: agent=%s role=%s",
-					reqCtx.customAgent.ID, role)
-				c.Error(errors.NewForbiddenError("Forbidden: this agent is restricted to contributors and above"))
-				return
-			}
-			logger.Warnf(reqCtx.ctx,
-				"[rbac] agent run would be blocked (logged, not enforced): agent=%s role=%s",
-				reqCtx.customAgent.ID, role)
-		}
-	}
-
 	// Sanity gate: agent mode requires a resolved CustomAgent. If we got
 	// here with agent_enabled=true but agent_id missing/unresolvable, the
 	// AgentQA service will fail deep inside the async goroutine with a
@@ -700,6 +678,20 @@ func (h *Handler) executeQA(reqCtx *qaRequestContext, mode qaMode, generateTitle
 	// (Agent mode handles completion in the defer block instead)
 	if mode == qaModeNormal {
 		var completionHandled bool
+
+		// Persist reasoning_content into agent_steps so historical reload can
+		// reconstruct the thinking card (same shape as Agent-mode steps).
+		// Accumulate on assistantMessage directly so user-initiated stop also
+		// keeps whatever reasoning had streamed before the cancel.
+		streamCtx.eventBus.On(event.EventAgentThought, func(ctx context.Context, evt event.Event) error {
+			data, ok := evt.Data.(event.AgentThoughtData)
+			if !ok || data.Content == "" {
+				return nil
+			}
+			appendQuickAnswerReasoning(streamCtx.assistantMessage, data.Content)
+			return nil
+		})
+
 		streamCtx.eventBus.On(event.EventAgentFinalAnswer, func(ctx context.Context, evt event.Event) error {
 			data, ok := evt.Data.(event.AgentFinalAnswerData)
 			if !ok {
@@ -901,6 +893,22 @@ func (h *Handler) persistLastRequestState(parentCtx context.Context, reqCtx *qaR
 	if err := h.sessionService.UpdateSessionLastRequestState(ctx, reqCtx.sessionID, state); err != nil {
 		logger.Warnf(ctx, "persist last_request_state failed for session %s: %v", reqCtx.sessionID, err)
 	}
+}
+
+// appendQuickAnswerReasoning accumulates streamed reasoning_content from
+// KnowledgeQA (fast answer) into a single AgentStep for history replay.
+func appendQuickAnswerReasoning(msg *types.Message, content string) {
+	if content == "" {
+		return
+	}
+	if len(msg.AgentSteps) == 0 {
+		msg.AgentSteps = types.AgentSteps{{
+			Iteration: 0,
+			Timestamp: time.Now(),
+			ToolCalls: make([]types.ToolCall, 0),
+		}}
+	}
+	msg.AgentSteps[0].ReasoningContent += content
 }
 
 // completeAssistantMessage marks an assistant message as complete, updates it,

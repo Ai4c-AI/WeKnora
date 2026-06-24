@@ -49,7 +49,7 @@ func newStreamPacketDumper(modelName string, request any) *streamPacketDumper {
 
 	safeModel := strings.Map(func(r rune) rune {
 		switch {
-		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_', r == '.':
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_':
 			return r
 		default:
 			return '_'
@@ -60,7 +60,15 @@ func newStreamPacketDumper(modelName string, request any) *streamPacketDumper {
 	}
 
 	name := fmt.Sprintf("llm_stream_%s_%s.jsonl", safeModel, time.Now().Format("20060102T150405.000000000"))
+	// Defense-in-depth against path traversal: the model name is externally
+	// controlled, so force the file to live directly under dir and verify the
+	// cleaned path cannot escape it.
+	name = filepath.Base(filepath.Clean("/" + name))
+	dir = filepath.Clean(dir)
 	path := filepath.Join(dir, name)
+	if rel, err := filepath.Rel(dir, path); err != nil || rel != name {
+		return nil
+	}
 
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
@@ -124,6 +132,54 @@ func (d *streamPacketDumper) WritePacketRaw(raw []byte) {
 	})
 	_, _ = d.file.Write(line)
 	_, _ = d.file.Write([]byte{'\n'})
+}
+
+// WriteError appends a terminal error record (stream read failure, API error, etc.).
+func (d *streamPacketDumper) WriteError(message string) {
+	if d == nil || d.file == nil || strings.TrimSpace(message) == "" {
+		return
+	}
+	line, err := json.Marshal(map[string]any{
+		"type":      "error",
+		"model":     d.model,
+		"timestamp": time.Now().UTC().Format(time.RFC3339Nano),
+		"message":   message,
+	})
+	if err != nil {
+		return
+	}
+	_ = d.writeLine(line)
+}
+
+// WriteHTTPError appends a non-2xx HTTP response before any SSE packets.
+func (d *streamPacketDumper) WriteHTTPError(statusCode int, body []byte) {
+	if d == nil || d.file == nil {
+		return
+	}
+	entry := map[string]any{
+		"type":        "http_error",
+		"model":       d.model,
+		"timestamp":   time.Now().UTC().Format(time.RFC3339Nano),
+		"status_code": statusCode,
+	}
+	if len(body) > 0 {
+		trimmed := bytesTrimSpace(body)
+		if json.Valid(trimmed) {
+			var parsed any
+			if json.Unmarshal(trimmed, &parsed) == nil {
+				entry["body"] = parsed
+			} else {
+				entry["body_raw"] = string(trimmed)
+			}
+		} else {
+			entry["body_raw"] = string(trimmed)
+		}
+	}
+	line, err := json.Marshal(entry)
+	if err != nil {
+		return
+	}
+	_ = d.writeLine(line)
 }
 
 // WritePacket marshals v as one JSON object per line (SDK stream Recv path).
