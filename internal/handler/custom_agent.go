@@ -43,10 +43,10 @@ func NewCustomAgentHandler(
 
 // CreateAgentRequest defines the request body for creating an agent
 type CreateAgentRequest struct {
-	Name        string                   `json:"name" binding:"required"`
-	Description string                   `json:"description"`
-	Avatar      string                   `json:"avatar"`
-	Config      types.CustomAgentConfig  `json:"config"`
+	Name        string                  `json:"name" binding:"required"`
+	Description string                  `json:"description"`
+	Avatar      string                  `json:"avatar"`
+	Config      types.CustomAgentConfig `json:"config"`
 }
 
 // UpdateAgentRequest defines the request body for updating an agent
@@ -79,6 +79,10 @@ func (h *CustomAgentHandler) CreateAgent(c *gin.Context) {
 	if err := c.ShouldBindJSON(&req); err != nil {
 		logger.Error(ctx, "Failed to parse request parameters", err)
 		c.Error(errors.NewBadRequestError("Invalid request parameters").WithDetails(err.Error()))
+		return
+	}
+	if err := authorizeAgentKnowledgeScope(ctx, req.Config); err != nil {
+		c.Error(err)
 		return
 	}
 
@@ -144,6 +148,10 @@ func (h *CustomAgentHandler) GetAgent(c *gin.Context) {
 		})
 		if err == service.ErrAgentNotFound {
 			c.Error(errors.NewNotFoundError("Agent not found"))
+			return
+		}
+		if appErr, ok := err.(*errors.AppError); ok {
+			c.Error(appErr)
 			return
 		}
 		c.Error(errors.NewInternalServerError(err.Error()))
@@ -311,6 +319,10 @@ func (h *CustomAgentHandler) UpdateAgent(c *gin.Context) {
 		c.Error(errors.NewBadRequestError("Invalid request parameters").WithDetails(err.Error()))
 		return
 	}
+	if err := authorizeAgentKnowledgeScope(ctx, req.Config); err != nil {
+		c.Error(err)
+		return
+	}
 
 	// Build agent object
 	agent := &types.CustomAgent{
@@ -444,6 +456,23 @@ func (h *CustomAgentHandler) CopyAgent(c *gin.Context) {
 	}
 
 	logger.Infof(ctx, "Copying custom agent, ID: %s", secutils.SanitizeForLog(id))
+	sourceAgent, err := h.service.GetAgentByID(ctx, id)
+	if err != nil {
+		logger.ErrorWithFields(ctx, err, map[string]interface{}{
+			"agent_id": id,
+		})
+		switch err {
+		case service.ErrAgentNotFound:
+			c.Error(errors.NewNotFoundError("Agent not found"))
+		default:
+			c.Error(errors.NewInternalServerError(err.Error()))
+		}
+		return
+	}
+	if err := authorizeAgentKnowledgeScope(ctx, sourceAgent.Config); err != nil {
+		c.Error(err)
+		return
+	}
 
 	// Copy the agent
 	copiedAgent, err := h.service.CopyAgent(ctx, id)
@@ -559,6 +588,15 @@ func (h *CustomAgentHandler) GetSuggestedQuestions(c *gin.Context) {
 		}
 	}
 
+	var tagIDs []string
+	if tagIDsStr := strings.TrimSpace(c.Query("tag_ids")); tagIDsStr != "" {
+		for _, id := range strings.Split(tagIDsStr, ",") {
+			if trimmed := strings.TrimSpace(id); trimmed != "" {
+				tagIDs = append(tagIDs, trimmed)
+			}
+		}
+	}
+
 	limit := 6
 	if limitStr := c.Query("limit"); limitStr != "" {
 		if parsed, err := strconv.Atoi(limitStr); err == nil && parsed > 0 {
@@ -566,16 +604,20 @@ func (h *CustomAgentHandler) GetSuggestedQuestions(c *gin.Context) {
 		}
 	}
 
-	logger.Infof(ctx, "Getting suggested questions for agent %s, kbIDs: %v, limit: %d",
-		secutils.SanitizeForLog(id), kbIDs, limit)
+	logger.Infof(ctx, "Getting suggested questions for agent %s, kbIDs: %v, tagIDs: %v, limit: %d",
+		secutils.SanitizeForLog(id), kbIDs, tagIDs, limit)
 
-	questions, err := h.service.GetSuggestedQuestions(ctx, id, kbIDs, knowledgeIDs, limit)
+	questions, err := h.service.GetSuggestedQuestions(ctx, id, kbIDs, knowledgeIDs, tagIDs, limit)
 	if err != nil {
 		logger.ErrorWithFields(ctx, err, map[string]interface{}{
 			"agent_id": id,
 		})
 		if err == service.ErrAgentNotFound {
 			c.Error(errors.NewNotFoundError("Agent not found"))
+			return
+		}
+		if appErr, ok := err.(*errors.AppError); ok {
+			c.Error(appErr)
 			return
 		}
 		c.Error(errors.NewInternalServerError(err.Error()))
@@ -588,4 +630,24 @@ func (h *CustomAgentHandler) GetSuggestedQuestions(c *gin.Context) {
 			"questions": questions,
 		},
 	})
+}
+
+func authorizeAgentKnowledgeScope(ctx context.Context, cfg types.CustomAgentConfig) error {
+	scope, ok := types.TenantAPIKeyScopeFromContext(ctx)
+	if !ok || !scope.IsKnowledgeBaseRestricted() {
+		return nil
+	}
+	switch strings.ToLower(strings.TrimSpace(cfg.KBSelectionMode)) {
+	case "none":
+		return nil
+	case "all":
+		return errors.NewForbiddenError("API key scope does not allow agents that use all knowledge bases")
+	case "selected":
+		return types.AuthorizeTenantAPIKeyKnowledgeBases(ctx, cfg.KnowledgeBases...)
+	default:
+		if len(cfg.KnowledgeBases) == 0 {
+			return nil
+		}
+		return types.AuthorizeTenantAPIKeyKnowledgeBases(ctx, cfg.KnowledgeBases...)
+	}
 }

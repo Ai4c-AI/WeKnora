@@ -52,6 +52,7 @@ import (
 	"github.com/Tencent/WeKnora/internal/application/service/file"
 	memoryService "github.com/Tencent/WeKnora/internal/application/service/memory"
 	"github.com/Tencent/WeKnora/internal/application/service/retriever"
+	"github.com/Tencent/WeKnora/internal/common"
 	"github.com/Tencent/WeKnora/internal/config"
 	"github.com/Tencent/WeKnora/internal/database"
 	"github.com/Tencent/WeKnora/internal/datasource"
@@ -66,6 +67,7 @@ import (
 	"github.com/Tencent/WeKnora/internal/im/dingtalk"
 	"github.com/Tencent/WeKnora/internal/im/feishu"
 	"github.com/Tencent/WeKnora/internal/im/mattermost"
+	"github.com/Tencent/WeKnora/internal/im/qqbot"
 	"github.com/Tencent/WeKnora/internal/im/slack"
 	"github.com/Tencent/WeKnora/internal/im/telegram"
 	"github.com/Tencent/WeKnora/internal/im/wechat"
@@ -136,6 +138,7 @@ func BuildContainer(container *dig.Container) *dig.Container {
 	// Data repositories layer
 	logger.Debugf(ctx, "[Container] Registering repositories...")
 	must(container.Provide(repository.NewTenantRepository))
+	must(container.Provide(repository.NewTenantAPIKeyRepository))
 	must(container.Provide(repository.NewTenantMemberRepository))
 	must(container.Provide(repository.NewTenantInvitationRepository))
 	must(container.Provide(repository.NewAuditLogRepository))
@@ -178,6 +181,7 @@ func BuildContainer(container *dig.Container) *dig.Container {
 	// Business service layer
 	logger.Debugf(ctx, "[Container] Registering business services...")
 	must(container.Provide(service.NewTenantService))
+	must(container.Provide(service.NewTenantAPIKeyService))
 	must(container.Provide(service.NewTenantMemberService))
 	must(container.Provide(service.NewTenantInvitationService))
 	must(container.Provide(service.NewAuditLogService))
@@ -259,7 +263,13 @@ func BuildContainer(container *dig.Container) *dig.Container {
 	redisAvailable := os.Getenv("REDIS_ADDR") != ""
 	if redisAvailable {
 		must(container.Provide(router.NewAsyncqClient, dig.As(new(interfaces.TaskEnqueuer))))
-		must(container.Provide(router.NewAsynqServer))
+		// Two independent asynq worker pools with separate concurrency budgets:
+		// the parse pool (all queues except QueueWiki) and the wiki pool
+		// (QueueWiki only). Hard capacity isolation so upstream parsing and the
+		// downstream wiki pipeline can't starve each other during concurrent
+		// uploads. Both run the same mux (see router.RunAsynqServer).
+		must(container.Provide(router.NewParseAsynqServer, dig.Name("parseAsynqServer")))
+		must(container.Provide(router.NewWikiAsynqServer, dig.Name("wikiAsynqServer")))
 		// Asynq inspector for cancel-by-knowledge-id (best-effort
 		// dequeue of pending/scheduled/retry tasks + active-task cancel).
 		must(container.Provide(router.NewAsynqInspector))
@@ -438,10 +448,11 @@ func initRedisClient() (*redis.Client, error) {
 	}
 
 	client := redis.NewClient(&redis.Options{
-		Addr:     redisAddr,
-		Username: os.Getenv("REDIS_USERNAME"),
-		Password: os.Getenv("REDIS_PASSWORD"),
-		DB:       db,
+		Addr:      redisAddr,
+		Username:  os.Getenv("REDIS_USERNAME"),
+		Password:  os.Getenv("REDIS_PASSWORD"),
+		DB:        db,
+		TLSConfig: common.RedisTLSConfig(),
 	})
 
 	_, err = client.Ping(context.Background()).Result()
@@ -1330,6 +1341,7 @@ func registerWebSearchProviders(registry *infra_web_search.Registry) {
 	registry.Register("ollama", infra_web_search.NewOllamaProvider)
 	registry.Register("baidu", infra_web_search.NewBaiduProvider)
 	registry.Register("searxng", infra_web_search.NewSearxngProvider)
+	registry.Register("keenable", infra_web_search.NewKeenableProvider)
 }
 
 // registerIMAdapterFactories registers adapter factories for each IM platform
@@ -1343,6 +1355,7 @@ func registerIMAdapterFactories(imService *imPkg.Service) {
 	imService.RegisterAdapterFactory("dingtalk", dingtalk.NewFactory())
 	imService.RegisterAdapterFactory("mattermost", mattermost.NewFactory())
 	imService.RegisterAdapterFactory("wechat", wechat.NewFactory())
+	imService.RegisterAdapterFactory("qqbot", qqbot.NewFactory())
 
 	// Load and start all enabled channels from database
 	if err := imService.LoadAndStartChannels(); err != nil {

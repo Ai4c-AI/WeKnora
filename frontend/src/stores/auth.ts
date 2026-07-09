@@ -59,7 +59,7 @@ export const useAuthStore = defineStore('auth', () => {
   })
 
   const hasValidTenant = computed(() => {
-    return !!tenant.value && !!tenant.value.api_key
+    return !!tenant.value && !!tenant.value.id
   })
 
   const currentTenantId = computed(() => {
@@ -246,6 +246,7 @@ export const useAuthStore = defineStore('auth', () => {
         if (parsed && typeof parsed === 'object') {
           parsed.selectedAgentId = BUILTIN_QUICK_ANSWER_ID
           parsed.selectedAgentSourceTenantId = null
+          parsed.isAgentEnabled = false
           if (parsed.conversationModels && typeof parsed.conversationModels === 'object') {
             parsed.conversationModels.summaryModelId = ''
             parsed.conversationModels.rerankModelId = ''
@@ -341,7 +342,6 @@ export const useAuthStore = defineStore('auth', () => {
         setTenant({
           id: String(tenantSnapshot.id) || '',
           name: tenantSnapshot.name || '',
-          api_key: tenantSnapshot.api_key || '',
           owner_id: tenantSnapshot.owner_id || u.id || '',
           description: tenantSnapshot.description,
           status: tenantSnapshot.status,

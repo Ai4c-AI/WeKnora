@@ -192,7 +192,7 @@
 
               <t-form-item :label="$t('auth.password')" name="password">
                 <t-input v-model="formData.password" :placeholder="$t('auth.passwordPlaceholder')" type="password"
-                  size="large" :disabled="loading" @enter="handleLogin" />
+                  autocomplete="current-password" size="large" :disabled="loading" @enter="handleLogin" />
               </t-form-item>
 
               <t-button type="submit" theme="primary" size="large" block :loading="loading" class="submit-button">
@@ -280,12 +280,12 @@
 
               <t-form-item :label="$t('auth.password')" name="password">
                 <t-input v-model="registerData.password" :placeholder="$t('auth.passwordPlaceholder')" type="password"
-                  size="large" :disabled="loading" />
+                  autocomplete="new-password" size="large" :disabled="loading" />
               </t-form-item>
 
               <t-form-item :label="$t('auth.confirmPassword')" name="confirmPassword">
                 <t-input v-model="registerData.confirmPassword" :placeholder="$t('auth.confirmPasswordPlaceholder')"
-                  type="password" size="large" :disabled="loading" @enter="handleRegister" />
+                  type="password" autocomplete="new-password" size="large" :disabled="loading" @enter="handleRegister" />
               </t-form-item>
 
               <t-button type="submit" theme="primary" size="large" block :loading="loading" class="submit-button">
@@ -553,7 +553,6 @@ const persistLoginResponse = async (response: any) => {
     authStore.setTenant({
       id: String(activeTenant.id) || '',
       name: activeTenant.name || '',
-      api_key: activeTenant.api_key || '',
       owner_id: response.user.id || '',
       created_at: activeTenant.created_at || new Date().toISOString(),
       updated_at: activeTenant.updated_at || new Date().toISOString()

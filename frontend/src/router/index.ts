@@ -129,6 +129,17 @@ const router = createRouter({
           meta: { requiresInit: true, requiresAuth: true }
         },
         {
+          path: "integrations",
+          redirect: (to) => ({
+            path: "/platform/settings",
+            query: {
+              ...to.query,
+              section: "integrations",
+            },
+          }),
+          meta: { requiresInit: true, requiresAuth: true }
+        },
+        {
           path: "creatChat",
           name: "globalCreatChat",
           component: () => import("../views/creatChat/creatChat.vue"),
@@ -197,7 +208,6 @@ function persistLoginResponse(authStore: ReturnType<typeof useAuthStore>, respon
     authStore.setTenant({
       id: String(response.tenant.id) || '',
       name: response.tenant.name || '',
-      api_key: response.tenant.api_key || '',
       owner_id: response.user.id || '',
       created_at: response.tenant.created_at || new Date().toISOString(),
       updated_at: response.tenant.updated_at || new Date().toISOString()
@@ -232,7 +242,6 @@ async function hydrateSessionFromToken(authStore: ReturnType<typeof useAuthStore
       authStore.setTenant({
         id: String(tenant.id) || '',
         name: tenant.name || '',
-        api_key: tenant.api_key || '',
         owner_id: tenant.owner_id || user.id || '',
         description: tenant.description,
         status: tenant.status,

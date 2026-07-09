@@ -28,6 +28,46 @@ type Agent struct {
 	CreatorName string       `json:"creator_name,omitempty"`
 }
 
+// AgentMode is an agent's operating mode (AgentConfig.AgentMode). It mirrors
+// the server constants in internal/types/custom_agent.go.
+type AgentMode string
+
+const (
+	// AgentModeQuickAnswer is the RAG mode for quick Q&A.
+	AgentModeQuickAnswer AgentMode = "quick-answer"
+	// AgentModeSmartReasoning is the ReAct mode for multi-step reasoning.
+	AgentModeSmartReasoning AgentMode = "smart-reasoning"
+)
+
+// AllAgentModes returns every agent operating mode the server recognises, in a
+// stable order. Use this instead of re-typing the set so callers can't drift
+// from the SDK.
+func AllAgentModes() []AgentMode {
+	return []AgentMode{AgentModeQuickAnswer, AgentModeSmartReasoning}
+}
+
+// KBSelectionMode controls how an agent selects knowledge bases
+// (AgentConfig.KBSelectionMode). It mirrors the server's documented values
+// ("all" | "selected" | "none") in internal/types/custom_agent.go.
+type KBSelectionMode string
+
+const (
+	// KBSelectionModeAll retrieves across every knowledge base.
+	KBSelectionModeAll KBSelectionMode = "all"
+	// KBSelectionModeSelected retrieves only the agent's attached KBs
+	// (AgentConfig.KnowledgeBases).
+	KBSelectionModeSelected KBSelectionMode = "selected"
+	// KBSelectionModeNone disables knowledge base retrieval.
+	KBSelectionModeNone KBSelectionMode = "none"
+)
+
+// AllKBSelectionModes returns every KB selection mode the server recognises, in
+// a stable order. Use this instead of re-typing the set so callers can't drift
+// from the SDK.
+func AllKBSelectionModes() []KBSelectionMode {
+	return []KBSelectionMode{KBSelectionModeAll, KBSelectionModeSelected, KBSelectionModeNone}
+}
+
 // AgentConfig represents the configuration for an agent.
 // Field names and JSON tags mirror internal/types.CustomAgentConfig.
 type AgentConfig struct {
@@ -242,6 +282,7 @@ type SuggestedQuestion struct {
 type SuggestedQuestionsRequest struct {
 	KnowledgeBaseIDs []string // Optional: override agent's KB scope
 	KnowledgeIDs     []string // Optional: limit to specific knowledge items
+	TagIDs           []string // Optional: limit to knowledge items under these tags
 	Limit            int      // Optional: max questions to return (default 6)
 }
 
@@ -268,6 +309,9 @@ func (c *Client) GetSuggestedQuestions(ctx context.Context, agentID string, requ
 		}
 		if len(request.KnowledgeIDs) > 0 {
 			query.Set("knowledge_ids", strings.Join(request.KnowledgeIDs, ","))
+		}
+		if len(request.TagIDs) > 0 {
+			query.Set("tag_ids", strings.Join(request.TagIDs, ","))
 		}
 		if request.Limit > 0 {
 			query.Set("limit", strconv.Itoa(request.Limit))

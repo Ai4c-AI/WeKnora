@@ -1,5 +1,9 @@
 <template>
-    <div class="chat" :class="{ 'is-embedded': embeddedMode, 'is-sidebar-collapsed': uiStore.sidebarCollapsed }">
+    <div class="chat" :class="{
+        'is-embedded': embeddedMode,
+        'is-sidebar-collapsed': uiStore.sidebarCollapsed,
+        'has-references-panel': referencesDrawerVisible,
+    }">
         <div ref="scrollContainer" class="chat_scroll_box" @scroll="handleScroll">
             <div class="msg_list" :class="{ 'is-embedded': embeddedMode }">
                 <!-- 消息列表骨架屏 -->
@@ -107,10 +111,11 @@
     <KnowledgeBaseEditorModal :visible="uiStore.showKBEditorModal" :mode="uiStore.kbEditorMode"
         :kb-id="uiStore.currentKBId || undefined" :initial-type="uiStore.kbEditorType"
         @update:visible="(val) => val ? null : uiStore.closeKBEditor()" @success="handleKBEditorSuccess" />
+    <ChatReferencesDrawer />
 </template>
 <script setup>
 import { storeToRefs } from 'pinia';
-import { ref, onMounted, onBeforeMount, onUnmounted, nextTick, watch, reactive, defineProps, computed } from 'vue';
+import { ref, onMounted, onBeforeMount, onUnmounted, nextTick, watch, reactive, computed } from 'vue';
 import { useRoute, onBeforeRouteLeave, onBeforeRouteUpdate } from 'vue-router';
 import InputField from '../../components/Input-field.vue';
 import botmsg from './components/botmsg.vue';
@@ -128,6 +133,11 @@ import { useKnowledgeBaseCreationNavigation } from '@/hooks/useKnowledgeBaseCrea
 import { useChatStreamHandler } from '@/composables/useChatStreamHandler';
 import { useStickyBottomOnResize } from '@/composables/useStickyBottomOnResize';
 import { clearCitationChunkCache } from '@/utils/citationChunkCache';
+import ChatReferencesDrawer from '@/components/ChatReferencesDrawer.vue';
+import { provideChatReferencesDrawer } from '@/composables/useChatReferencesDrawer';
+
+const referencesDrawer = provideChatReferencesDrawer();
+const { visible: referencesDrawerVisible } = referencesDrawer;
 
 const props = defineProps({
     session_id: { type: String, default: '' },
@@ -144,7 +154,7 @@ const isAgentStreamSession = () => {
     if (props.embeddedMode) {
         return !!(props.agentId && props.agentId !== 'builtin-quick-answer');
     }
-    return useSettingsStoreInstance.isAgentEnabled;
+    return useSettingsStoreInstance.isAgentStreamMode;
 };
 
 const uiStore = useUIStore();
@@ -275,13 +285,7 @@ const fetchSuggestedQuestions = async () => {
     try {
         const agentId = useSettingsStoreInstance.selectedAgentId;
         if (!agentId) return;
-        const selectedKBs = useSettingsStoreInstance.getSelectedKnowledgeBases();
-        const selectedFiles = useSettingsStoreInstance.getSelectedFiles();
-        const res = await getSuggestedQuestions(agentId, {
-            knowledge_base_ids: selectedKBs.length > 0 ? selectedKBs : undefined,
-            knowledge_ids: selectedFiles.length > 0 ? selectedFiles : undefined,
-            limit: 6,
-        });
+        const res = await getSuggestedQuestions(agentId, useSettingsStoreInstance.getSuggestedQuestionsParams(6));
         if (fetchId === suggestedQuestionsFetchId) {
             suggestedQuestions.value = res?.data?.questions || [];
         }
@@ -312,18 +316,16 @@ const debouncedFetchSuggestions = () => {
     suggestedDebounceTimer = setTimeout(() => { fetchSuggestedQuestionsIfNeeded(); }, 300);
 };
 
-// 监听 Agent / 知识库 / 文件切换，重新获取推荐问题
+// 监听 Agent / 知识库 / 文件 / 标签 / MCP / Skill @mention，重新获取推荐问题
 watch(
-    () => useSettingsStoreInstance.selectedAgentId,
-    debouncedFetchSuggestions,
-);
-watch(
-    () => useSettingsStoreInstance.settings.selectedKnowledgeBases,
-    debouncedFetchSuggestions,
-    { deep: true },
-);
-watch(
-    () => useSettingsStoreInstance.settings.selectedFiles,
+    () => ({
+        agentId: useSettingsStoreInstance.selectedAgentId,
+        kbs: useSettingsStoreInstance.settings.selectedKnowledgeBases,
+        files: useSettingsStoreInstance.settings.selectedFiles,
+        tags: useSettingsStoreInstance.settings.selectedTags,
+        mcps: useSettingsStoreInstance.settings.selectedMCPServices,
+        skills: useSettingsStoreInstance.settings.selectedSkills,
+    }),
     debouncedFetchSuggestions,
     { deep: true },
 );
@@ -623,8 +625,10 @@ const sendMsg = async (value, modelId = '', mentionedItems = [], imageFiles = []
     userHasScrolledUp.value = false;
     scrollToBottom(true);
 
-    // Get agent mode status from settings store
-    const agentEnabled = props.embeddedMode ? (props.agentId && props.agentId !== 'builtin-quick-answer') : useSettingsStoreInstance.isAgentEnabled;
+    // Get agent mode status from settings store (prefer selectedAgentId for builtins)
+    const agentEnabled = props.embeddedMode
+        ? (props.agentId && props.agentId !== 'builtin-quick-answer')
+        : useSettingsStoreInstance.isAgentStreamMode;
 
     // Get web search status from settings store
     const webSearchEnabled = props.embeddedMode ? false : useSettingsStoreInstance.isWebSearchEnabled;
@@ -652,14 +656,17 @@ const sendMsg = async (value, modelId = '', mentionedItems = [], imageFiles = []
     }
     const kbIds = [...kbIdSet];
     const knowledgeIds = [...fileIdSet];
+    const tagIds = [...new Set((mentionedItems || []).filter(item => item.type === 'tag' && item.id).map(item => item.id))];
+    const mcpServiceIds = [...new Set((mentionedItems || []).filter(item => item.type === 'mcp' && item.id).map(item => item.id))];
+    const skillNames = [...new Set((mentionedItems || []).filter(item => item.type === 'skill' && item.id).map(item => item.skill_name || item.id))];
 
     // Get selected agent ID (backend resolves shared agent and its tenant from share relation)
     const selectedAgentId = props.embeddedMode ? props.agentId : (useSettingsStoreInstance.selectedAgentId || '');
 
     const endpoint = agentEnabled ? '/api/v1/agent-chat' : '/api/v1/knowledge-chat';
 
-    // Get selected MCP services from settings store (if available)
-    const mcpServiceIds = props.embeddedMode ? [] : (useSettingsStoreInstance.settings.selectedMCPServices || []);
+    const requestMcpServiceIds = agentEnabled ? mcpServiceIds : [];
+    const requestSkillNames = agentEnabled ? skillNames : [];
 
     await startStream({
         session_id: session_id.value,
@@ -670,7 +677,9 @@ const sendMsg = async (value, modelId = '', mentionedItems = [], imageFiles = []
         web_search_enabled: webSearchEnabled,
         enable_memory: enableMemoryOverride,
         summary_model_id: modelId,
-        mcp_service_ids: mcpServiceIds,
+        mcp_service_ids: requestMcpServiceIds,
+        skill_names: requestSkillNames,
+        tag_ids: tagIds,
         mentioned_items: mentionedItems,
         images: imageAttachments.length > 0 ? imageAttachments : undefined,
         attachment_uploads: attachmentUploads.length > 0 ? attachmentUploads : undefined,
@@ -827,6 +836,7 @@ onMounted(async () => {
 })
 const clearData = () => {
     stopStream();
+    referencesDrawer.close();
     isReplying.value = false;
     fullContent.value = '';
     // Stop any IM-reply recovery poll for the session we're leaving/switching.
@@ -878,6 +888,19 @@ onBeforeRouteUpdate((to, from, next) => {
         min-width: 100%;
         padding: 0;
         overflow-x: hidden;
+    }
+
+    &:not(.is-embedded) {
+        @media (min-width: 960px) {
+            transition: padding-right 0.3s cubic-bezier(0.22, 0.61, 0.36, 1);
+        }
+    }
+
+    &.has-references-panel:not(.is-embedded) {
+        @media (min-width: 960px) {
+            padding-right: 420px;
+            box-sizing: border-box;
+        }
     }
 
     &.is-embedded :deep(.answers-input) {
@@ -1016,13 +1039,12 @@ onBeforeRouteUpdate((to, from, next) => {
 
 .input-container {
     min-height: 115px;
-    // Keep the input visible when messages overflow: without flex-shrink: 0
-    // a tall .chat_scroll_box can squeeze this container down to 0 height.
     flex-shrink: 0;
     margin: 0 auto;
     width: 100%;
     max-width: 800px;
     box-sizing: border-box;
+    position: relative;
 
     &.is-embedded {
         max-width: 100%;
