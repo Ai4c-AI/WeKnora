@@ -174,7 +174,29 @@ func TestOssEnsureBucket_UnreachableEndpoint(t *testing.T) {
 		t.Fatalf("newOSSClient() error: %v", err)
 	}
 
-	err = ossEnsureBucket(client, "test-bucket")
+	// Bucket that definitely doesn't exist - should return error
+	err = ossEnsureBucket(client, "this-bucket-definitely-does-not-exist-12345")
+	if err == nil {
+		t.Error("ossEnsureBucket with non-existent bucket should return an error")
+	}
+}
+
+func TestOssEnsureBucket_CreateFails(t *testing.T) {
+	client, err := newOSSClient(
+		"https://oss-cn-hangzhou.aliyuncs.com",
+		"cn-hangzhou",
+		"test-invalid-key",
+		"test-invalid-secret",
+	)
+	if err != nil {
+		t.Fatalf("newOSSClient() error: %v", err)
+	}
+
+	// Use a bucket that does not exist so IsBucketExist returns false and the
+	// create path is exercised; with invalid credentials PutBucket then fails.
+	// A common name like "test-bucket" already exists globally on OSS, which
+	// would short-circuit at IsBucketExist and make this assertion flaky.
+	err = ossEnsureBucket(client, "weknora-nonexistent-bucket-create-fails-12345")
 	if err == nil {
 		t.Error("ossEnsureBucket with unreachable endpoint should return an error")
 	}
