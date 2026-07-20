@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	agenttools "github.com/Tencent/WeKnora/internal/agent/tools"
 	"github.com/Tencent/WeKnora/internal/models/chat"
 	"github.com/Tencent/WeKnora/internal/types"
 	"github.com/Tencent/WeKnora/internal/types/interfaces"
@@ -165,8 +166,9 @@ func buildAssistantHistoryMessages(m *types.Message) []chat.Message {
 		for _, tc := range nonTerminalCalls {
 			argsJSON, _ := json.Marshal(tc.Args)
 			assistantMsg.ToolCalls = append(assistantMsg.ToolCalls, chat.ToolCall{
-				ID:   tc.ID,
-				Type: "function",
+				ID:               tc.ID,
+				Type:             "function",
+				ProviderMetadata: tc.ProviderMetadata,
 				Function: chat.FunctionCall{
 					Name:      tc.Name,
 					Arguments: string(argsJSON),
@@ -226,7 +228,7 @@ func toolCallOutput(tc types.ToolCall) string {
 		}
 		return "Error: tool call failed"
 	}
-	return tc.Result.Output
+	return agenttools.CompactToolOutputForHistory(tc.Name, tc.Result)
 }
 
 // extractImageCaptionsFromMessage concatenates non-empty Caption fields from

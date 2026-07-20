@@ -38,6 +38,7 @@ data/files/
 data/weknora.db
 data/weknora.db-wal
 data/weknora.db-shm
+skills-lock.json
 
 web/
 
@@ -62,6 +63,11 @@ miniprogram/project.private.config.json
 bin/
 obj/
 artifacts/
+
+# .NET local databases
+*.db
+*.db-shm
+*.db-wal
 
 # Rider / VS / VS Code
 .idea/

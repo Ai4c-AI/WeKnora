@@ -2,6 +2,8 @@ package types
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -23,13 +25,28 @@ func (j *lazyJieba) CutForSearch(s string, hmm bool) []string {
 
 func (j *lazyJieba) instance() *gojieba.Jieba {
 	j.once.Do(func() {
-		j.jieba = gojieba.NewJieba()
+		j.jieba = newJieba()
 	})
 	return j.jieba
 }
 
 // Jieba is a global instance of Chinese text segmentation tool
 var Jieba = &lazyJieba{}
+
+func newJieba() *gojieba.Jieba {
+	dictDir := os.Getenv("JIEBA_DICT_DIR")
+	if dictDir == "" {
+		return gojieba.NewJieba()
+	}
+
+	return gojieba.NewJieba(
+		filepath.Join(dictDir, "jieba.dict.utf8"),
+		filepath.Join(dictDir, "hmm_model.utf8"),
+		filepath.Join(dictDir, "user.dict.utf8"),
+		filepath.Join(dictDir, "idf.utf8"),
+		filepath.Join(dictDir, "stop_words.utf8"),
+	)
+}
 
 // EvaluationStatue represents the status of an evaluation task
 type EvaluationStatue int
