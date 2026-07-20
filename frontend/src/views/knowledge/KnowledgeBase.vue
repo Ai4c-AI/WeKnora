@@ -154,6 +154,10 @@ onUnmounted(() => {
 })
 const missingStorageEngine = computed(() => {
   if (!kbInfo.value || isFAQ.value) return false
+  // storage_backend_id is authoritative; storage_provider_config.provider is a
+  // compatibility projection for older clients. Either being present means the
+  // KB has a bound storage instance and uploads should not be blocked.
+  if (kbInfo.value.storage_backend_id) return false
   const spc = kbInfo.value.storage_provider_config
   return !spc || !spc.provider
 })
@@ -528,6 +532,9 @@ const parseStatusOptions = computed(() => [
   { label: t('knowledgeBase.parseStatusProcessing'), value: 'processing' },
   { label: t('knowledgeBase.parseStatusCompleted'), value: 'completed' },
   { label: t('knowledgeBase.parseStatusFailed'), value: 'failed' },
+  { label: t('knowledgeBase.parseStatusCancelled'), value: 'cancelled' },
+  { label: t('knowledgeBase.parseStatusFinalizing'), value: 'finalizing' },
+  { label: t('knowledgeBase.parseStatusDraft'), value: 'draft' },
 ]);
 const selectedSource = ref('');
 // Source filter combines ingestion channels and the "manual"/"url" virtual
@@ -777,7 +784,10 @@ const onTagManageChanged = (payload?: { deletedTagId?: string }) => {
       await loadKnowledgeFiles(kbId.value);
       await loadTags(kbId.value, true);
     })();
+    return;
   }
+  resetPage();
+  loadKnowledgeFiles(kbId.value);
 };
 
 const handleKnowledgeTagChange = async (knowledgeId: string, tagIds: string[]) => {
@@ -2291,7 +2301,7 @@ async function createNewSession(value: string): Promise<void> {
       </template>
 
       <!-- DocContent drawer (shared by documents tab and wiki source refs) -->
-      <DocContent ref="docContentRef" :visible="isCardDetails" :details="details" :canEditKB="canEdit"
+      <DocContent ref="docContentRef" :visible="isCardDetails" :details="details" :canEditKB="canEdit" :kbId="kbId"
         @closeDoc="closeDoc" @getDoc="getDoc">
       </DocContent>
     </div>

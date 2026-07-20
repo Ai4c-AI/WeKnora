@@ -79,7 +79,7 @@ const (
 	// wikiInflightPrefix keys the per-KB slot set: wiki:inflight:{kbID}.
 	wikiInflightPrefix = "wiki:inflight:"
 	// wikiInflightDefault is the fallback cap when WikiConfig.IngestMaxInflight
-	// is unset. 4 leaves headroom in a default 16-worker wiki pool for other
+	// is unset. 4 leaves half of the default 8-worker wiki pool for other
 	// KBs while still giving one KB solid parallelism.
 	wikiInflightDefault = 4
 	// wikiInflightTTL is how long a reserved slot survives without renewal.
@@ -200,6 +200,10 @@ const (
 	// top of the asynq.TaskID coalescing).
 	wikiFinalizeLockTTL   = 60 * time.Second
 	wikiFinalizeLockRenew = 20 * time.Second
+
+	// wikiIngestCleanupTimeout bounds detached tail cleanup after the asynq
+	// task context has been cancelled or hit its timeout.
+	wikiIngestCleanupTimeout = 10 * time.Second
 )
 
 // wikiFinalizeChange is a doc-level add/remove entry for the index-intro
@@ -535,6 +539,13 @@ func (s *wikiIngestService) Handle(ctx context.Context, t *asynq.Task) error {
 	default:
 		return s.ProcessWikiIngest(ctx, t)
 	}
+}
+
+func wikiIngestCleanupContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithTimeout(context.WithoutCancel(ctx), wikiIngestCleanupTimeout)
 }
 
 // enqueueFinalize persists this batch's KB-global convergence work into the
@@ -920,13 +931,15 @@ func (s *wikiIngestService) decodePendingRows(ctx context.Context, rows []*types
 // trimPendingList deletes consumed rows from task_pending_ops. Empty
 // input is a no-op so callers can invoke unconditionally at the end
 // of a batch.
-func (s *wikiIngestService) trimPendingList(ctx context.Context, ids []int64) {
+func (s *wikiIngestService) trimPendingList(ctx context.Context, ids []int64) error {
 	if s.pendingRepo == nil || len(ids) == 0 {
-		return
+		return nil
 	}
 	if err := s.pendingRepo.DeleteByIDs(ctx, ids); err != nil {
 		logger.Warnf(ctx, "wiki ingest: failed to trim %d pending rows: %v", len(ids), err)
+		return err
 	}
+	return nil
 }
 
 // finalizeWikiSubtask releases this knowledge's slot in the finalizing
@@ -960,13 +973,13 @@ func (s *wikiIngestService) finalizeWikiSubtask(ctx context.Context, knowledgeID
 //     (rows are ordered by id ASC and we never moved/touched it).
 //   - If the count exceeds the retry cap: archive the op into
 //     task_dead_letters and DeleteByIDs to remove it from the queue.
-//     Both writes are best-effort — a DB failure here is logged and
-//     swallowed so a single transient blip doesn't recursively spawn
-//     more failures.
-func (s *wikiIngestService) requeueFailedOps(ctx context.Context, payload WikiIngestPayload, ops []WikiPendingOp) {
+//     Settlement failures are returned so the caller does not mark claims
+//     settled while rows are still claimed or undeleted.
+func (s *wikiIngestService) requeueFailedOps(ctx context.Context, payload WikiIngestPayload, ops []WikiPendingOp) error {
 	if s.pendingRepo == nil || len(ops) == 0 {
-		return
+		return nil
 	}
+	var settleErrs []error
 	for _, op := range ops {
 		if op.dbID == 0 {
 			// Op was never persisted (synthetic / test) — nothing to
@@ -976,6 +989,7 @@ func (s *wikiIngestService) requeueFailedOps(ctx context.Context, payload WikiIn
 		count, err := s.pendingRepo.IncrFailCount(ctx, op.dbID)
 		if err != nil {
 			logger.Warnf(ctx, "wiki ingest: failed to increment fail count for %s (id=%d): %v", op.KnowledgeID, op.dbID, err)
+			settleErrs = append(settleErrs, fmt.Errorf("increment fail count id=%d: %w", op.dbID, err))
 			// Without a fresh count we can't tell whether to drop. Be
 			// conservative: leave the row in place; the next PeekBatch
 			// will see it again and we'll try once more.
@@ -989,6 +1003,7 @@ func (s *wikiIngestService) requeueFailedOps(ctx context.Context, payload WikiIn
 			// budget still counts down.
 			if err := s.pendingRepo.ReleaseByIDs(ctx, []int64{op.dbID}); err != nil {
 				logger.Warnf(ctx, "wiki ingest: failed to release claim for retry id=%d: %v", op.dbID, err)
+				settleErrs = append(settleErrs, fmt.Errorf("release retry claim id=%d: %w", op.dbID, err))
 			}
 			logger.Infof(ctx, "wiki ingest: re-queued failed op %s (%s) for retry (attempt %d/%d)", op.KnowledgeID, op.DocTitle, count, wikiMaxFailRetries)
 			continue
@@ -1016,12 +1031,15 @@ func (s *wikiIngestService) requeueFailedOps(ctx context.Context, payload WikiIn
 				FailCount: count,
 			}); dlErr != nil {
 				logger.Warnf(ctx, "wiki ingest: failed to archive op %s to dead letters: %v", op.KnowledgeID, dlErr)
+				settleErrs = append(settleErrs, fmt.Errorf("archive dead letter id=%d: %w", op.dbID, dlErr))
 			}
 		}
 		if err := s.pendingRepo.DeleteByIDs(ctx, []int64{op.dbID}); err != nil {
 			logger.Warnf(ctx, "wiki ingest: failed to drop dead-lettered row id=%d: %v", op.dbID, err)
+			settleErrs = append(settleErrs, fmt.Errorf("drop dead-lettered row id=%d: %w", op.dbID, err))
 		}
 	}
+	return errors.Join(settleErrs...)
 }
 
 // docIngestResult captures per-document info for batch post-processing.
@@ -1086,6 +1104,12 @@ type WikiBatchContext struct {
 	// Already Normalize()'d — consumers can assume it is one of the
 	// three valid values.
 	ExtractionGranularity types.WikiExtractionGranularity
+
+	// ContentInstructions and ExtractionInstructions are KB-scoped business
+	// guidance. Stable citation, merge, taxonomy and JSON rules remain in the
+	// system templates and cannot be replaced by these fields.
+	ContentInstructions    string
+	ExtractionInstructions string
 
 	// PlannedFolderID holds the per-slug wiki_folders.id assigned by the batch
 	// taxonomy planning pass (planBatchTaxonomy + folder resolution), keyed by
@@ -1729,6 +1753,7 @@ func formatExistingTaxonomyForPrompt(paths [][]string) string {
 	}
 	return strings.TrimSpace(buf.String())
 }
+
 // getExistingPageSlugsForKnowledge returns all page slugs that currently
 // reference a given knowledge ID in their source_refs. Used to snapshot
 // state before re-ingest so the reduce phase can reconcile additions vs
@@ -1848,7 +1873,9 @@ const indexIntroSummaryCap = 200
 //
 // The intro is written to both Content and Summary so legacy readers
 // that fall through to Summary stay in sync.
-func (s *wikiIngestService) rebuildIndexPage(ctx context.Context, chatModel chat.Chat, payload WikiIngestPayload, changeDesc, lang string) error {
+func (s *wikiIngestService) rebuildIndexPage(ctx context.Context, chatModel chat.Chat, payload WikiIngestPayload,
+	changeDesc, lang, customInstructions string,
+) error {
 	indexPage, _ := s.wikiService.GetIndex(ctx, payload.KnowledgeBaseID)
 	if indexPage == nil {
 		return nil
@@ -1902,8 +1929,10 @@ func (s *wikiIngestService) rebuildIndexPage(ctx context.Context, chatModel chat
 			docSummaries.WriteString("(no documents yet)")
 		}
 		generatedIntro, genErr := s.generateWithTemplate(ctx, chatModel, agent.WikiIndexIntroPrompt, map[string]string{
-			"DocumentSummaries": framing + docSummaries.String(),
-			"Language":          lang,
+			"DocumentSummaries":  framing + docSummaries.String(),
+			"Language":           lang,
+			"CustomInstructions": customInstructions,
+			"InstructionScope":   "wiki_content",
 		})
 		if genErr != nil {
 			intro = "# Wiki Index\n\nThis wiki contains knowledge extracted from uploaded documents.\n"
@@ -1918,10 +1947,12 @@ func (s *wikiIngestService) rebuildIndexPage(ctx context.Context, chatModel chat
 		// change-description block already encodes the "what just
 		// changed" signal the prompt is asking for.
 		updatedIntro, genErr := s.generateWithTemplate(ctx, chatModel, agent.WikiIndexIntroUpdatePrompt, map[string]string{
-			"ExistingIntro":     existingIntro,
-			"ChangeDescription": changeDesc,
-			"DocumentSummaries": "",
-			"Language":          lang,
+			"ExistingIntro":      existingIntro,
+			"ChangeDescription":  changeDesc,
+			"DocumentSummaries":  "",
+			"Language":           lang,
+			"CustomInstructions": customInstructions,
+			"InstructionScope":   "wiki_content",
 		})
 		if genErr != nil {
 			intro = existingIntro // keep existing on error
@@ -2233,6 +2264,7 @@ func (s *wikiIngestService) generateWithTemplate(ctx context.Context, chatModel 
 	}
 
 	prompt := buf.String()
+	prompt = types.AppendCustomPromptInstructions(prompt, data["CustomInstructions"], data["InstructionScope"])
 	thinking := false
 
 	var lastErr error

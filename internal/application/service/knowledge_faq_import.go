@@ -196,8 +196,9 @@ func (s *knowledgeService) UpsertFAQEntries(ctx context.Context,
 		types.TypeFAQImport,
 		payloadBytes,
 		asynq.TaskID(asynqTaskID),
-		asynq.Queue("default"),
+		asynq.Queue(types.QueueMaintenance),
 		asynq.MaxRetry(maxRetry),
+		asynq.Timeout(2*time.Hour),
 	)
 	info, err := s.task.Enqueue(task)
 	if err != nil {
@@ -1898,7 +1899,7 @@ func (s *knowledgeService) UpdateLastFAQImportResultDisplayStatus(ctx context.Co
 		return werrors.NewBadRequestError("invalid display status, must be 'open' or 'close'")
 	}
 
-	// 获取当前租户ID
+	// 获取当前空间ID
 	tenantID := ctx.Value(types.TenantIDContextKey).(uint64)
 
 	// 查找FAQ类型的knowledge
