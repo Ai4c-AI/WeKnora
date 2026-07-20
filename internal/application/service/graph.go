@@ -71,6 +71,7 @@ type graphBuilder struct {
 	relationshipMap  map[string]*types.Relationship // Relationship mapping
 	chatModel        chat.Chat
 	canonicalMapRepo interfaces.CanonicalMapRepository
+	reviewService    *OntologyReviewService // Optional: nil when ontology review is disabled
 	chunkGraph       map[string]map[string]*ChunkRelation // Document chunk relationship graph
 	mutex            sync.RWMutex                         // Mutex for concurrent operations
 }
@@ -80,12 +81,14 @@ func NewGraphBuilder(
 	config *config.Config,
 	chatModel chat.Chat,
 	canonicalMapRepo interfaces.CanonicalMapRepository,
+	reviewService *OntologyReviewService,
 ) types.GraphBuilder {
 	logger.Info(context.Background(), "Creating new graph builder")
 	return &graphBuilder{
 		config:           config,
 		chatModel:        chatModel,
 		canonicalMapRepo: canonicalMapRepo,
+		reviewService:    reviewService,
 		entityMap:        make(map[string]*types.Entity),
 		entityMapByTitle: make(map[string]*types.Entity),
 		relationshipMap:  make(map[string]*types.Relationship),
@@ -891,6 +894,18 @@ func (b *graphBuilder) extractMicroTBoxes(ctx context.Context, chunks []*types.C
 		}
 	}
 	log.Infof("micro-TBox extraction completed: %d/%d chunks produced ontology", extracted, len(chunks))
+
+	// Enqueue chunks with ontology for expert review (if review service is configured)
+	if b.reviewService != nil && extracted > 0 {
+		knowledgeTitles := make(map[string]string) // chunkID → knowledge title
+		// In the graph builder context we don't have direct access to knowledge titles;
+		// the review service's EnqueueChunksFromGraph will use empty strings as fallback.
+		if err := b.reviewService.EnqueueChunksFromGraph(
+			ctx, chunks[0].TenantID, chunks[0].KnowledgeBaseID, chunks, knowledgeTitles,
+		); err != nil {
+			log.WithError(err).Warn("Failed to enqueue chunks for ontology review")
+		}
+	}
 }
 
 // GetAllEntities returns all entities

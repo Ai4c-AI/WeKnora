@@ -86,6 +86,7 @@ type RouterParams struct {
 	DataSourceCredentialsHandler *handler.DataSourceCredentialsHandler
 	WeKnoraCloudHandler          *handler.WeKnoraCloudHandler
 	WikiPageHandler              *handler.WikiPageHandler
+	OntologyReviewHandler        *handler.OntologyReviewHandler
 }
 
 // NewRouter 创建新的路由
@@ -231,6 +232,10 @@ func NewRouter(params RouterParams) *gin.Engine {
 		RegisterWeKnoraCloudRoutes(v1, params.WeKnoraCloudHandler, rbacGuards)
 		RegisterWikiPageRoutes(v1, params.WikiPageHandler, rbacGuards)
 		RegisterChunkerDebugRoutes(v1, rbacGuards)
+
+		if params.OntologyReviewHandler != nil {
+			RegisterOntologyReviewRoutes(v1, params.OntologyReviewHandler, rbacGuards)
+		}
 	}
 
 	return r
@@ -1794,5 +1799,24 @@ func RegisterWikiPageRoutes(r *gin.RouterGroup, wikiHandler *handler.WikiPageHan
 		// Issues
 		wiki.GET("/issues", g.Viewer(), wikiHandler.ListIssues)
 		wiki.PUT("/issues/:issue_id/status", g.OwnedWikiKBOrAdmin(), wikiHandler.UpdateIssueStatus)
+	}
+}
+
+// RegisterOntologyReviewRoutes registers ontology review endpoints.
+// Admin+ access: ontology review modifies the knowledge graph schema layer.
+func RegisterOntologyReviewRoutes(r *gin.RouterGroup, h *handler.OntologyReviewHandler, g *rbacGuards) {
+	if h == nil {
+		return
+	}
+	review := r.Group("/ontology/review")
+	{
+		// Queue: list chunks pending review. Admin+ (schema governance).
+		review.GET("/queue", g.Admin(), h.ListQueue)
+		// Detail: single chunk review view with evidence spans.
+		review.GET("/chunks/:chunkId", g.Admin(), h.GetChunkDetail)
+		// Actions: submit accept/reject/edit.
+		review.POST("/chunks/:chunkId/actions", g.Admin(), h.ApplyAction)
+		// Approve all: promote raw ontology to reviewed.
+		review.POST("/chunks/:chunkId/approve_all", g.Admin(), h.ApproveAll)
 	}
 }

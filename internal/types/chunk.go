@@ -167,10 +167,14 @@ type Chunk struct {
 	// when generating embeddings. NOT persisted — populated by the chunker
 	// during initial splitting and discarded after indexing.
 	ContextHeader string `json:"-" gorm:"-"`
-	OntologyJSON        *MicroTBox `json:"ontology_json,omitempty"        gorm:"type:jsonb;serializer:json"`
-	OntologyExtractedAt *time.Time `json:"ontology_extracted_at,omitempty"`
-	OntologyConfidence  *float64   `json:"ontology_confidence,omitempty"`
-	InstanceFactsJSON   []Triple   `json:"instance_facts_json,omitempty"  gorm:"type:jsonb;serializer:json"`
+	OntologyJSON          *MicroTBox            `json:"ontology_json,omitempty"           gorm:"type:jsonb;serializer:json"`
+	OntologyExtractedAt   *time.Time            `json:"ontology_extracted_at,omitempty"`
+	OntologyConfidence    *float64              `json:"ontology_confidence,omitempty"`
+	InstanceFactsJSON     []Triple              `json:"instance_facts_json,omitempty"     gorm:"type:jsonb;serializer:json"`
+	OntologyJSONReviewed  *MicroTBox            `json:"ontology_json_reviewed,omitempty"  gorm:"type:jsonb;serializer:json"`
+	OntologyReviewStatus  OntologyReviewStatus  `json:"ontology_review_status,omitempty"`
+	OntologyReviewedBy    *uint64               `json:"ontology_reviewed_by,omitempty"`
+	OntologyReviewedAt    *time.Time            `json:"ontology_reviewed_at,omitempty"`
 }
 
 // EmbeddingContent returns the chunk content with ContextHeader prepended

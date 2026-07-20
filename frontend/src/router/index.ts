@@ -112,6 +112,18 @@ const router = createRouter({
           meta: { requiresInit: true, requiresAuth: true }
         },
         {
+          path: "knowledge-bases/:kbId/ontology-review",
+          name: "ontologyReviewQueue",
+          component: () => import("../views/ontology/OntologyReviewQueue.vue"),
+          meta: { requiresInit: true, requiresAuth: true }
+        },
+        {
+          path: "knowledge-bases/:kbId/ontology-review/:chunkId",
+          name: "ontologyChunkReview",
+          component: () => import("../views/ontology/OntologyChunkReview.vue"),
+          meta: { requiresInit: true, requiresAuth: true }
+        },
+        {
           path: "knowledge-search",
           // 旧路径保留为重定向，打开全局命令面板（⌘K），带上可选的 q 参数
           redirect: (to) => {

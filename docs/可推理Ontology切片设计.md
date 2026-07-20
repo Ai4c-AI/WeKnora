@@ -1706,7 +1706,7 @@ ALTER TABLE chunks
   ADD COLUMN ontology_reviewed_at     TIMESTAMPTZ;
 ```
 
-**审核队列表**：
+**审核队列表**（含展示用冗余字段，避免队列接口 N+1）：
 
 ```sql
 CREATE TABLE ontology_review_queue (
@@ -1714,11 +1714,15 @@ CREATE TABLE ontology_review_queue (
     tenant_id         BIGINT NOT NULL,
     knowledge_base_id TEXT NOT NULL,
     chunk_id          TEXT NOT NULL,
-    priority          INT NOT NULL DEFAULT 50,   -- 0-100, 越大越优先
-    priority_reason   TEXT,                       -- e.g. "high-freq entity: Engineer x17"
+    knowledge_title   TEXT NOT NULL DEFAULT '',      -- 源文档标题快照（入队时填充）
+    content_preview   TEXT NOT NULL DEFAULT '',      -- chunk 前 200 字符快照
+    priority          INT NOT NULL DEFAULT 50,       -- 0-100, 越大越优先
+    priority_reason   TEXT,                           -- e.g. "high-freq entity: Engineer x17"
     assigned_to       BIGINT REFERENCES users(id),
-    status            TEXT NOT NULL DEFAULT 'pending',
+    status            TEXT NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending','in_review','approved','rejected','no_review')),
     created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE (tenant_id, chunk_id)
 );
 
@@ -1734,13 +1738,15 @@ CREATE TABLE ontology_review_audit (
     tenant_id     BIGINT NOT NULL,
     chunk_id      TEXT NOT NULL,
     reviewer_id   BIGINT NOT NULL,
-    action        TEXT NOT NULL,    -- accept / reject / edit / merge
-    target_kind   TEXT NOT NULL,    -- class / property / shape / alias / axiom
+    action        TEXT NOT NULL CHECK (action IN ('accept','reject','edit','approve_all')),
+    target_kind   TEXT NOT NULL CHECK (target_kind IN ('class','property','shape','alias','axiom')),
     target_id     TEXT NOT NULL,
     before_value  JSONB,
     after_value   JSONB,
     created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+CREATE INDEX idx_review_audit_chunk ON ontology_review_audit (tenant_id, chunk_id);
 ```
 
 ### 12.5 优先级算法【新增】
@@ -1752,12 +1758,27 @@ CREATE TABLE ontology_review_audit (
 | 实体频率 | 40 | log(被多少 chunk 引用同名 entity) × 系数 |
 | 公理复杂度 | 20 | (classes + properties + axioms) 总数归一化 |
 | LLM 置信度反向 | 20 | (1 - confidence) × 20 |
-| 冲突检测命中 | 15 | §4.7 切片合成阶段触发 warning 的 chunk 优先 |
+| 冲突检测命中 | 15 | 入库时轻量冲突预检命中（同 KB 内 class 声明的 subClassOf/disjointWith 不一致），非查询时才检测 |
 | 用户查询命中 | 5 | 最近 7 天被 Agent 检索命中的 chunk |
 
-> 实现位置：[internal/application/service/ontology_review_priority.go](internal/application/service/ontology_review_priority.go)（新增）
+> 实现位置：[internal/application/service/ontology_review.go](internal/application/service/ontology_review.go)（新增）
 
 **经验规律**：审核 top 5% 高优先级 chunk 通常能消除 60-70% 的 ontology 质量问题（80/20 原则的具体表现）。
+
+#### 12.5.1 入库时冲突预检（轻量）
+
+在 graph builder 的 `extractMicroTBoxes` 完成后，对当前批次的 chunk 做一次 KB 级 class 声明一致性检查。同一 class id 在不同 chunk 中的 `subClassOf` / `disjointWith` 声明不一致即标为冲突，命中冲突的 chunk 在优先级计算中获得 +15 分。检测逻辑为：
+1. 收集当前批次内所有 class 声明
+2. 同一 class 出现 ≥2 次时比较声明一致性
+3. 单次出现时查数据库同 KB 下是否有冲突声明
+
+详见 MVP 规格书 §4.4。
+
+#### 12.5.2 批量回填命令
+
+提供 CLI 命令 `weknora ontology backfill --kb-id <kb_id>` 为已有 `ontology_json` 但未入审核队列的历史 chunk 批量生成队列条目。支持 `--since` 时间窗口过滤和 `--dry-run` 干跑模式。
+
+详见 MVP 规格书 §4.5。
 
 ### 12.6 UI 关键页面（前端）
 
